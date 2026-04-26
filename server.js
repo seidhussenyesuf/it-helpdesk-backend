@@ -27,29 +27,36 @@ let db;
 let client;
 let isDatabaseConnected = false;
 
+
+
+
+// Updated MongoDB connection with better SSL handling
+// Updated MongoDB connection with better SSL handling
 async function connectToMongoDB() {
   try {
     console.log('🔄 Connecting to MongoDB...');
     
-    // Check if MongoDB URI is provided
     if (!MONGODB_URI || MONGODB_URI === 'mongodb://localhost:27017/ticket_system') {
       console.log('⚠️  Using default MongoDB URI. Make sure MongoDB is running locally.');
-      console.log('💡 To use MongoDB Atlas, set MONGODB_URI in .env file');
     }
     
-    client = new MongoClient(MONGODB_URI, {
+    // **FIXED: Simplified connection options without hardcoded SSL/TLS**
+    const connectionOptions = {
       serverSelectionTimeoutMS: 10000,
       connectTimeoutMS: 30000,
       socketTimeoutMS: 45000,
-    });
+      retryWrites: true,
+      w: 'majority'
+      // **REMOVED: tls: true and tlsAllowInvalidCertificates: false**
+    };
+    
+    client = new MongoClient(MONGODB_URI, connectionOptions);
     
     await client.connect();
     db = client.db(DB_NAME);
     isDatabaseConnected = true;
     
     console.log('✅ Connected to MongoDB successfully');
-    
-    // Create indexes
     await createIndexes();
     console.log('✅ Database indexes created');
     
@@ -58,15 +65,29 @@ async function connectToMongoDB() {
     console.error('❌ MongoDB connection error:', error.message);
     isDatabaseConnected = false;
     
-    console.log('\n💡 TROUBLESHOOTING TIPS:');
-    console.log('1. Install MongoDB locally: https://www.mongodb.com/try/download/community');
-    console.log('2. Or use MongoDB Atlas (cloud): https://www.mongodb.com/cloud/atlas');
-    console.log('3. For local MongoDB, run: mongod --dbpath="C:\\data\\db"');
-    console.log('4. Create .env file with MONGODB_URI=mongodb://localhost:27017/ticket_system');
+    console.log('\n💡 MongoDB Atlas Connection Troubleshooting:');
+    console.log('1. Check your IP is whitelisted in MongoDB Atlas');
+    console.log('2. Verify your username/password in the connection string');
+    console.log('3. Make sure your cluster is running');
+    console.log('4. Try using the mongodb+srv:// format');
     
-    // Don't exit process, allow server to start without database
     return false;
   }
+}
+
+// Add this function after your MongoDB connection setup
+function getDB() {
+  // If you're using MongoClient directly
+  if (typeof client !== 'undefined' && client) {
+    return client.db('ticket_system');
+  }
+  
+  // If you're using mongoose
+  if (typeof mongoose !== 'undefined' && mongoose.connection.db) {
+    return mongoose.connection.db;
+  }
+  
+  throw new Error('Database connection not available');
 }
 
 async function createIndexes() {
@@ -79,6 +100,14 @@ async function createIndexes() {
     await db.collection('comments').createIndex({ ticket_id: 1 });
     await db.collection('ticket_logs').createIndex({ ticket_id: 1 });
     await db.collection('counters').createIndex({ _id: 1 });
+    
+    // ADD THESE FOR FAST DELETION
+    await db.collection('comments').createIndex({ author_id: 1 });
+    await db.collection('ticket_logs').createIndex({ changed_by: 1 });
+    await db.collection('notifications').createIndex({ user_id: 1 });
+    await db.collection('procurement_requests').createIndex({ requested_by: 1 });
+    
+    console.log('✅ Database indexes created');
   } catch (error) {
     console.error('Index creation error:', error.message);
   }
@@ -98,7 +127,7 @@ async function initializeDatabase() {
     const collections = await db.listCollections().toArray();
     const collectionNames = collections.map(col => col.name);
     
-    const requiredCollections = ['users', 'teams', 'tickets', 'comments', 'ticket_logs', 'counters'];
+    const requiredCollections = ['users', 'teams', 'tickets', 'comments', 'ticket_logs', 'counters', 'procurement_requests', 'procurement_messages', 'notifications'];
     
     for (const collectionName of requiredCollections) {
       if (!collectionNames.includes(collectionName)) {
@@ -115,7 +144,8 @@ async function initializeDatabase() {
         { _id: 'ticketId', sequence_value: 1 },
         { _id: 'teamId', sequence_value: 10 },
         { _id: 'commentId', sequence_value: 1 },
-        { _id: 'logId', sequence_value: 1 }
+        { _id: 'logId', sequence_value: 1 },
+        { _id: 'notificationId', sequence_value: 1 }
       ]);
       console.log('✅ Counters initialized');
     }
@@ -171,7 +201,13 @@ async function initializeDatabase() {
   }
 }
 
-// Auto-increment sequence function
+
+
+
+
+
+
+// Enhanced auto-increment sequence function
 async function getNextSequence(sequenceName) {
   if (!isDatabaseConnected) {
     console.error('Database not connected for sequence');
@@ -179,30 +215,51 @@ async function getNextSequence(sequenceName) {
   }
 
   try {
-    const result = await db.collection('counters').findOneAndUpdate(
-      { _id: sequenceName },
-      { $inc: { sequence_value: 1 } },
-      { 
-        returnDocument: 'after',
-        upsert: true
-      }
-    );
+    // First, check if counter exists
+    const existingCounter = await db.collection('counters').findOne({ _id: sequenceName });
     
-    if (result && result.value) {
-      return result.value.sequence_value;
-    } else {
-      // If no result, initialize the counter
+    if (!existingCounter) {
+      // Initialize the counter if it doesn't exist
       await db.collection('counters').insertOne({
         _id: sequenceName,
         sequence_value: 1
       });
       return 1;
     }
+    
+    // Use findOneAndUpdate for atomic operation
+    const result = await db.collection('counters').findOneAndUpdate(
+      { _id: sequenceName },
+      { $inc: { sequence_value: 1 } },
+      { 
+        returnDocument: 'after',
+        upsert: true // This ensures it creates if doesn't exist
+      }
+    );
+    
+    if (result && result.value) {
+      return result.value.sequence_value;
+    } else {
+      // Fallback: manually increment
+      const current = await db.collection('counters').findOne({ _id: sequenceName });
+      const newValue = (current?.sequence_value || 0) + 1;
+      await db.collection('counters').updateOne(
+        { _id: sequenceName },
+        { $set: { sequence_value: newValue } },
+        { upsert: true }
+      );
+      return newValue;
+    }
   } catch (error) {
     console.error('Sequence error for', sequenceName, ':', error);
-    return Math.floor(Math.random() * 10000) + 1;
+    // Emergency fallback - generate random ID
+    return Math.floor(Math.random() * 100000) + 1000;
   }
 }
+
+
+
+
 
 // Database connection middleware
 const requireDatabase = (req, res, next) => {
@@ -249,6 +306,10 @@ if (!fs.existsSync(ticketUploadsDir)) {
   fs.mkdirSync(ticketUploadsDir, { recursive: true });
 }
 
+
+
+
+
 // Email configuration
 const emailConfig = {
   host: 'smtp.gmail.com',
@@ -256,7 +317,7 @@ const emailConfig = {
   secure: false,
   auth: {
     user: process.env.EMAIL_USER || 'hussenseid670@gmail.com',
-    pass: process.env.EMAIL_PASSWORD || 'kluyzrmcjdovuvfu'
+    pass: process.env.EMAIL_PASSWORD || 'bbxtzlnixdsnvyvj'
   }
 };
 
@@ -360,14 +421,1175 @@ const requireSeniorOrAdmin = (req, res, next) => {
   next();
 };
 
+
+
+
+// ========== NOTIFICATION FUNCTIONS ==========
+
+// Create notification function
+async function createNotification(notificationData) {
+  if (!isDatabaseConnected) {
+    console.log('❌ Database not connected for notification creation');
+    return false;
+  }
+
+  try {
+    const notificationId = await getNextSequence('notificationId');
+    
+    const notificationDoc = {
+      _id: notificationId,
+      notification_id: notificationId,
+      user_id: notificationData.user_id,
+      title: notificationData.title,
+      message: notificationData.message,
+      type: notificationData.type || 'system',
+      related_ticket_id: notificationData.related_ticket_id || null,
+      related_request_id: notificationData.related_request_id || null,
+      read: false,
+      created_at: new Date(),
+      updated_at: new Date()
+    };
+
+    await db.collection('notifications').insertOne(notificationDoc);
+    console.log(`✅ Notification created for user ${notificationData.user_id}: ${notificationData.title}`);
+    return true;
+  } catch (error) {
+    console.error('❌ Create notification error:', error);
+    return false;
+  }
+}
+
+// Create multiple notifications for a team
+async function createTeamNotifications(teamId, notificationData) {
+  if (!isDatabaseConnected) {
+    console.log('❌ Database not connected for team notifications');
+    return false;
+  }
+
+  try {
+    // Get all senior officers in the team
+    const teamOfficers = await db.collection('users').find({
+      team_id: teamId,
+      role: 'senior',
+      is_active: true
+    }).toArray();
+
+    let createdCount = 0;
+    for (const officer of teamOfficers) {
+      const success = await createNotification({
+        ...notificationData,
+        user_id: officer.user_id
+      });
+      if (success) createdCount++;
+    }
+
+    console.log(`✅ Created ${createdCount} notifications for team ${teamId}`);
+    return createdCount > 0;
+  } catch (error) {
+    console.error('❌ Create team notifications error:', error);
+    return false;
+  }
+}
+
+// ========== NOTIFICATION ROUTES ==========
+
+// Get user notifications
+app.get('/api/notifications', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    const { limit = 50, unread_only = false } = req.query;
+    
+    console.log(`🔔 Fetching notifications for user ${req.user.id}`);
+    
+    let query = { user_id: req.user.id };
+    if (unread_only === 'true') {
+      query.read = false;
+    }
+    
+    const notifications = await db.collection('notifications')
+      .find(query)
+      .sort({ created_at: -1 })
+      .limit(parseInt(limit))
+      .toArray();
+
+    // Get unread count
+    const unreadCount = await db.collection('notifications').countDocuments({
+      user_id: req.user.id,
+      read: false
+    });
+
+    console.log(`✅ Found ${notifications.length} notifications for user ${req.user.id} (${unreadCount} unread)`);
+    
+    res.json({
+      success: true,
+      notifications,
+      unread_count: unreadCount
+    });
+  } catch (error) {
+    console.error('❌ Get notifications error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch notifications: ' + error.message 
+    });
+  }
+});
+
+// Mark notification as read
+app.put('/api/notifications/:notificationId/read', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+    
+    console.log(`📖 Marking notification ${notificationId} as read for user ${req.user.id}`);
+    
+    const result = await db.collection('notifications').updateOne(
+      { 
+        notification_id: parseInt(notificationId),
+        user_id: req.user.id 
+      },
+      { 
+        $set: { 
+          read: true,
+          updated_at: new Date()
+        } 
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Notification not found or access denied' 
+      });
+    }
+
+    console.log(`✅ Notification ${notificationId} marked as read`);
+    
+    res.json({
+      success: true,
+      message: 'Notification marked as read'
+    });
+  } catch (error) {
+    console.error('❌ Mark notification as read error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to mark notification as read: ' + error.message 
+    });
+  }
+});
+
+// Mark all notifications as read
+app.put('/api/notifications/read-all', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    console.log(`📖 Marking all notifications as read for user ${req.user.id}`);
+    
+    const result = await db.collection('notifications').updateMany(
+      { 
+        user_id: req.user.id,
+        read: false
+      },
+      { 
+        $set: { 
+          read: true,
+          updated_at: new Date()
+        } 
+      }
+    );
+
+    console.log(`✅ ${result.modifiedCount} notifications marked as read`);
+    
+    res.json({
+      success: true,
+      message: `Marked ${result.modifiedCount} notifications as read`,
+      marked_count: result.modifiedCount
+    });
+  } catch (error) {
+    console.error('❌ Mark all notifications as read error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to mark notifications as read: ' + error.message 
+    });
+  }
+});
+
+// Delete notification
+app.delete('/api/notifications/:notificationId', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+    
+    console.log(`🗑️ Deleting notification ${notificationId} for user ${req.user.id}`);
+    
+    const result = await db.collection('notifications').deleteOne({
+      notification_id: parseInt(notificationId),
+      user_id: req.user.id
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Notification not found or access denied' 
+      });
+    }
+
+    console.log(`✅ Notification ${notificationId} deleted`);
+    
+    res.json({
+      success: true,
+      message: 'Notification deleted successfully'
+    });
+  } catch (error) {
+    console.error('❌ Delete notification error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to delete notification: ' + error.message 
+    });
+  }
+});
+
+// Delete all notifications
+app.delete('/api/notifications', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    const { read_only = false } = req.query;
+    
+    console.log(`🗑️ Deleting notifications for user ${req.user.id} (read_only: ${read_only})`);
+    
+    let query = { user_id: req.user.id };
+    if (read_only === 'true') {
+      query.read = true;
+    }
+    
+    const result = await db.collection('notifications').deleteMany(query);
+
+    console.log(`✅ ${result.deletedCount} notifications deleted`);
+    
+    res.json({
+      success: true,
+      message: `Deleted ${result.deletedCount} notifications`,
+      deleted_count: result.deletedCount
+    });
+  } catch (error) {
+    console.error('❌ Delete notifications error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to delete notifications: ' + error.message 
+    });
+  }
+});
+
+// Get notification statistics
+app.get('/api/notifications/stats', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    console.log(`📊 Getting notification stats for user ${req.user.id}`);
+    
+    const totalCount = await db.collection('notifications').countDocuments({
+      user_id: req.user.id
+    });
+    
+    const unreadCount = await db.collection('notifications').countDocuments({
+      user_id: req.user.id,
+      read: false
+    });
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const todayCount = await db.collection('notifications').countDocuments({
+      user_id: req.user.id,
+      created_at: { $gte: today }
+    });
+    
+    // Count by type
+    const typeCounts = await db.collection('notifications').aggregate([
+      { $match: { user_id: req.user.id } },
+      { $group: { _id: '$type', count: { $sum: 1 } } }
+    ]).toArray();
+
+    console.log(`✅ Notification stats: ${totalCount} total, ${unreadCount} unread, ${todayCount} today`);
+    
+    res.json({
+      success: true,
+      stats: {
+        total_count: totalCount,
+        unread_count: unreadCount,
+        today_count: todayCount,
+        by_type: typeCounts
+      }
+    });
+  } catch (error) {
+    console.error('❌ Get notification stats error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch notification statistics: ' + error.message 
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
+// ========== COMPREHENSIVE NOTIFICATION SYSTEM ==========
+
+// Enhanced notification function with email
+// Enhanced notification function with email for ALL events AND admin notification
+async function createComprehensiveNotification(notificationData) {
+  if (!isDatabaseConnected) {
+    console.log('❌ Database not connected for notification creation');
+    return false;
+  }
+
+  try {
+    const notificationId = await getNextSequence('notificationId');
+    
+    const notificationDoc = {
+      _id: notificationId,
+      notification_id: notificationId,
+      user_id: notificationData.user_id,
+      title: notificationData.title,
+      message: notificationData.message,
+      type: notificationData.type || 'system',
+      related_ticket_id: notificationData.related_ticket_id || null,
+      related_request_id: notificationData.related_request_id || null,
+      priority: notificationData.priority || 'medium',
+      read: false,
+      created_at: new Date(),
+      updated_at: new Date()
+    };
+
+    await db.collection('notifications').insertOne(notificationDoc);
+    console.log(`✅ Database notification created: ${notificationData.title} for user ${notificationData.user_id}`);
+
+    // 🔥 SEND EMAIL TO USER
+    try {
+      await sendEmailNotification(notificationData.user_id, notificationData.title, notificationData.message);
+      console.log(`📧 Email notification sent to user for: ${notificationData.title}`);
+    } catch (emailError) {
+      console.error('❌ User email notification failed (non-critical):', emailError.message);
+    }
+
+    // 🔥 SEND EMAIL TO ADMIN FOR ALL NOTIFICATIONS
+    try {
+      // Get user info for admin notification
+      const user = await db.collection('users').findOne({ user_id: notificationData.user_id });
+      
+      await notifyAdmin(notificationData.title, notificationData.message, {
+        ticketId: notificationData.related_ticket_id,
+        userName: user ? user.name : 'Unknown',
+        userEmail: user ? user.email : 'Unknown',
+        action: notificationData.type
+      });
+      console.log(`📧 Admin notification sent for: ${notificationData.title}`);
+    } catch (adminEmailError) {
+      console.error('❌ Admin email notification failed (non-critical):', adminEmailError.message);
+    }
+
+    return true;
+  } catch (error) {
+    console.error('❌ Create notification error:', error);
+    return false;
+  }
+}
+
+
+
+
+// Fixed procurement message notification - NO axiosInstance
+async function createProcurementMessageNotification(requestId, senderId, senderName, message) {
+  try {
+    console.log(`🔔 Creating procurement message notification for request: ${requestId}`);
+    
+    const request = await db.collection('procurement_requests').findOne({ _id: new ObjectId(requestId) });
+    if (!request) {
+      console.log('❌ Procurement request not found for notification');
+      return;
+    }
+
+    const usersToNotify = new Set();
+
+    // Notify the requester (if sender is not the requester)
+    if (request.requested_by !== senderId) {
+      usersToNotify.add(request.requested_by);
+      console.log(`🔔 Will notify requester: ${request.requested_by}`);
+    }
+
+    // Notify assigned officer about procurement messages
+    const ticket = await db.collection('tickets').findOne({ ticket_id: request.ticket_id });
+    if (ticket && ticket.assigned_to && ticket.assigned_to !== senderId) {
+      usersToNotify.add(ticket.assigned_to);
+      console.log(`🔔 Will notify assigned officer: ${ticket.assigned_to}`);
+    }
+
+    // Notify all users who sent messages in this procurement request
+    if (request.messages && request.messages.length > 0) {
+      request.messages.forEach(msg => {
+        if (msg.sender_id && msg.sender_id !== senderId) {
+          usersToNotify.add(msg.sender_id);
+          console.log(`🔔 Will notify message participant: ${msg.sender_id}`);
+        }
+      });
+    }
+
+    console.log(`🔔 Total users to notify: ${usersToNotify.size}`);
+
+    // Create notifications for all relevant users
+    for (const userId of usersToNotify) {
+      const success = await createComprehensiveNotification({
+        user_id: userId,
+        title: '💬 Equipment Message',
+        message: `${senderName} sent a message about "${request.item_name}": "${message.substring(0, 100)}..."`,
+        type: 'procurement_message',
+        related_ticket_id: request.ticket_id,
+        related_request_id: requestId,
+        priority: 'medium'
+      });
+      
+      if (success) {
+        console.log(`✅ Notification sent to user: ${userId}`);
+      } else {
+        console.log(`❌ Failed to send notification to user: ${userId}`);
+      }
+    }
+
+    console.log(`✅ Procurement message notifications completed for request: ${requestId}`);
+
+  } catch (error) {
+    console.error('❌ Procurement message notification error:', error);
+  }
+}
+
+// Fixed procurement notification - NO axiosInstance
+async function createProcurementNotification(requestId, action, actionBy) {
+  try {
+    const request = await db.collection('procurement_requests').findOne({ _id: new ObjectId(requestId) });
+    if (!request) return;
+
+    const actionConfig = {
+      'created': {
+        title: '🛒 New Equipment Request',
+        message: `New equipment request submitted for "${request.item_name}" in ticket #${request.ticket_id}`,
+        priority: 'high'
+      },
+      'approved': {
+        title: '✅ Equipment Approved',
+        message: `Your equipment request for "${request.item_name}" has been approved by ${actionBy}`,
+        priority: 'high'
+      },
+      'rejected': {
+        title: '❌ Equipment Rejected',
+        message: `Your equipment request for "${request.item_name}" has been rejected by ${actionBy}`,
+        priority: 'high'
+      },
+      'ordered': {
+        title: '📦 Equipment Ordered',
+        message: `Your equipment request for "${request.item_name}" has been ordered`,
+        priority: 'medium'
+      },
+      'delivered': {
+        title: '🎁 Equipment Delivered',
+        message: `Your equipment request for "${request.item_name}" has been delivered`,
+        priority: 'medium'
+      },
+      'cancelled': {
+        title: '🚫 Request Cancelled',
+        message: `Your equipment request for "${request.item_name}" has been cancelled by ${actionBy}`,
+        priority: 'high'
+      }
+    };
+
+    const config = actionConfig[action];
+    if (config) {
+      // Notify the requester
+      await createComprehensiveNotification({
+        user_id: request.requested_by,
+        title: config.title,
+        message: config.message,
+        type: 'procurement',
+        related_ticket_id: request.ticket_id,
+        related_request_id: requestId,
+        priority: config.priority
+      });
+
+      // Notify all senior officers in the team about new procurement requests
+      if (action === 'created') {
+        const ticket = await db.collection('tickets').findOne({ ticket_id: request.ticket_id });
+        if (ticket && ticket.team_id) {
+          const teamOfficers = await db.collection('users').find({
+            team_id: ticket.team_id,
+            role: 'senior',
+            is_active: true
+          }).toArray();
+
+          for (const officer of teamOfficers) {
+            if (officer.user_id !== request.requested_by) {
+              await createComprehensiveNotification({
+                user_id: officer.user_id,
+                title: '🛒 New Equipment Request',
+                message: `New equipment request for "${request.item_name}" in ticket #${request.ticket_id}`,
+                type: 'procurement',
+                related_ticket_id: request.ticket_id,
+                related_request_id: requestId,
+                priority: 'medium'
+              });
+            }
+          }
+        }
+      }
+
+      // Notify assigned officer about procurement updates
+      const ticket = await db.collection('tickets').findOne({ ticket_id: request.ticket_id });
+      if (ticket && ticket.assigned_to && ticket.assigned_to !== request.requested_by) {
+        await createComprehensiveNotification({
+          user_id: ticket.assigned_to,
+          title: config.title,
+          message: `Equipment request for ticket #${request.ticket_id}: ${config.message}`,
+          type: 'procurement',
+          related_ticket_id: request.ticket_id,
+          related_request_id: requestId,
+          priority: 'medium'
+        });
+      }
+    }
+  } catch (error) {
+    console.error('❌ Procurement notification error:', error);
+  }
+}
+// Enhanced ticket status notification
+async function createTicketStatusNotification(ticketId, newStatus, changedByName) {
+  const ticket = await db.collection('tickets').findOne({ ticket_id: parseInt(ticketId) });
+  if (!ticket) return;
+
+  const statusConfig = {
+    'In Progress': {
+      title: '🔄 Ticket In Progress',
+      message: `Your ticket #${ticketId} is now being worked on by ${changedByName}.`,
+      priority: 'medium'
+    },
+    'Resolved': {
+      title: '✅ Ticket Resolved',
+      message: `Your ticket #${ticketId} has been resolved by ${changedByName}. Please review and close if satisfied.`,
+      priority: 'high'
+    },
+    'Closed': {
+      title: '🔒 Ticket Closed',
+      message: `Your ticket #${ticketId} has been closed by ${changedByName}.`,
+      priority: 'medium'
+    },
+    'Queued': {
+      title: '⏳ Ticket Queued',
+      message: `Your ticket #${ticketId} has been placed in queue. Position: ${ticket.queue_position}. Estimated wait: ${ticket.estimated_wait_days} days.`,
+      priority: 'low'
+    },
+    'Reopened': {
+      title: '🔄 Ticket Reopened',
+      message: `Your ticket #${ticketId} has been reopened by ${changedByName}.`,
+      priority: 'medium'
+    }
+  };
+
+  const config = statusConfig[newStatus];
+  if (config) {
+    await createComprehensiveNotification({
+      user_id: ticket.user_id,
+      title: config.title,
+      message: config.message,
+      type: 'ticket_status',
+      related_ticket_id: ticketId,
+      priority: config.priority
+    });
+
+    // Also notify assigned officer if status changed by someone else
+    if (ticket.assigned_to && ticket.assigned_to !== ticket.user_id) {
+      await createComprehensiveNotification({
+        user_id: ticket.assigned_to,
+        title: config.title,
+        message: `Ticket #${ticketId} status changed to ${newStatus} by ${changedByName}.`,
+        type: 'ticket_status',
+        related_ticket_id: ticketId,
+        priority: 'medium'
+      });
+    }
+  }
+}
+
+// Enhanced comment notification
+async function createCommentNotification(ticketId, commenterId, commenterName, commentText) {
+  const ticket = await db.collection('tickets').findOne({ ticket_id: parseInt(ticketId) });
+  if (!ticket) return;
+
+  const usersToNotify = new Set();
+
+  // Always notify ticket owner (if commenter is not the owner)
+  if (ticket.user_id !== commenterId) {
+    usersToNotify.add(ticket.user_id);
+  }
+
+  // Notify assigned officer (if different from commenter and ticket owner)
+  if (ticket.assigned_to && ticket.assigned_to !== commenterId) {
+    usersToNotify.add(ticket.assigned_to);
+  }
+
+  // Notify all users who commented on this ticket (except current commenter)
+  const commenters = await db.collection('comments').distinct('author_id', { 
+    ticket_id: parseInt(ticketId),
+    author_id: { $ne: commenterId }
+  });
+  
+  commenters.forEach(commenterId => usersToNotify.add(commenterId));
+
+  for (const userId of usersToNotify) {
+    await createComprehensiveNotification({
+      user_id: userId,
+      title: '💬 New Comment',
+      message: `${commenterName} commented on ticket #${ticketId}: "${commentText.substring(0, 100)}..."`,
+      type: 'comment_added',
+      related_ticket_id: ticketId,
+      priority: 'medium'
+    });
+  }
+}
+
+// Enhanced procurement request notifications
+async function createProcurementNotification(requestId, action, actionBy) {
+  const request = await db.collection('procurement_requests').findOne({ _id: new ObjectId(requestId) });
+  if (!request) return;
+
+  const actionConfig = {
+    'created': {
+      title: '🛒 New Equipment Request',
+      message: `New equipment request submitted for "${request.item_name}" in ticket #${request.ticket_id}`,
+      priority: 'high'
+    },
+    'approved': {
+      title: '✅ Equipment Approved',
+      message: `Your equipment request for "${request.item_name}" has been approved by ${actionBy}`,
+      priority: 'high'
+    },
+    'rejected': {
+      title: '❌ Equipment Rejected',
+      message: `Your equipment request for "${request.item_name}" has been rejected by ${actionBy}`,
+      priority: 'high'
+    },
+    'ordered': {
+      title: '📦 Equipment Ordered',
+      message: `Your equipment request for "${request.item_name}" has been ordered`,
+      priority: 'medium'
+    },
+    'delivered': {
+      title: '🎁 Equipment Delivered',
+      message: `Your equipment request for "${request.item_name}" has been delivered`,
+      priority: 'medium'
+    },
+    'cancelled': {
+      title: '🚫 Request Cancelled',
+      message: `Your equipment request for "${request.item_name}" has been cancelled by ${actionBy}`,
+      priority: 'high'
+    }
+  };
+
+  const config = actionConfig[action];
+  if (config) {
+    // Notify the requester
+    await createComprehensiveNotification({
+      user_id: request.requested_by,
+      title: config.title,
+      message: config.message,
+      type: 'procurement',
+      related_ticket_id: request.ticket_id,
+      related_request_id: requestId,
+      priority: config.priority
+    });
+
+    // Notify all senior officers in the team about new procurement requests
+    if (action === 'created') {
+      const ticket = await db.collection('tickets').findOne({ ticket_id: request.ticket_id });
+      if (ticket && ticket.team_id) {
+        const teamOfficers = await db.collection('users').find({
+          team_id: ticket.team_id,
+          role: 'senior',
+          is_active: true
+        }).toArray();
+
+        for (const officer of teamOfficers) {
+          if (officer.user_id !== request.requested_by) {
+            await createComprehensiveNotification({
+              user_id: officer.user_id,
+              title: '🛒 New Equipment Request',
+              message: `New equipment request for "${request.item_name}" in ticket #${request.ticket_id}`,
+              type: 'procurement',
+              related_ticket_id: request.ticket_id,
+              related_request_id: requestId,
+              priority: 'medium'
+            });
+          }
+        }
+      }
+    }
+
+    // Notify assigned officer about procurement updates
+    const ticket = await db.collection('tickets').findOne({ ticket_id: request.ticket_id });
+    if (ticket && ticket.assigned_to && ticket.assigned_to !== request.requested_by) {
+      await createComprehensiveNotification({
+        user_id: ticket.assigned_to,
+        title: config.title,
+        message: `Equipment request for ticket #${request.ticket_id}: ${config.message}`,
+        type: 'procurement',
+        related_ticket_id: request.ticket_id,
+        related_request_id: requestId,
+        priority: 'medium'
+      });
+    }
+  }
+}
+
+// Enhanced procurement message notification
+async function createProcurementMessageNotification(requestId, senderId, senderName, message) {
+  const request = await db.collection('procurement_requests').findOne({ _id: new ObjectId(requestId) });
+  if (!request) return;
+
+  const usersToNotify = new Set();
+
+  // Notify the requester (if sender is not the requester)
+  if (request.requested_by !== senderId) {
+    usersToNotify.add(request.requested_by);
+  }
+
+  // Notify assigned officer about procurement messages
+  const ticket = await db.collection('tickets').findOne({ ticket_id: request.ticket_id });
+  if (ticket && ticket.assigned_to && ticket.assigned_to !== senderId) {
+    usersToNotify.add(ticket.assigned_to);
+  }
+
+  // Notify all users who sent messages in this procurement request
+  const messageSenders = await db.collection('procurement_requests').distinct('messages.sender_id', { 
+    _id: new ObjectId(requestId) 
+  });
+  
+  messageSenders.forEach(senderId => {
+    if (senderId !== senderId) {
+      usersToNotify.add(senderId);
+    }
+  });
+
+  for (const userId of usersToNotify) {
+    await createComprehensiveNotification({
+      user_id: userId,
+      title: '💬 Equipment Message',
+      message: `${senderName} sent a message about "${request.item_name}": "${message.substring(0, 100)}..."`,
+      type: 'procurement_message',
+      related_ticket_id: request.ticket_id,
+      related_request_id: requestId,
+      priority: 'medium'
+    });
+  }
+}
+
+// System-wide notifications for important events
+async function createSystemNotification(title, message, targetUsers = 'all') {
+  let users = [];
+  
+  if (targetUsers === 'all') {
+    users = await db.collection('users').find({ is_active: true }).toArray();
+  } else if (targetUsers === 'seniors') {
+    users = await db.collection('users').find({ role: 'senior', is_active: true }).toArray();
+  } else if (targetUsers === 'admins') {
+    users = await db.collection('users').find({ role: 'admin', is_active: true }).toArray();
+  }
+
+  for (const user of users) {
+    await createComprehensiveNotification({
+      user_id: user.user_id,
+      title: `⚙️ ${title}`,
+      message: message,
+      type: 'system',
+      priority: 'high'
+    });
+  }
+}
+
+
+
+
+
+// ========== PROCUREMENT ROUTES ==========
+
+// Get procurement requests for a ticket
+app.get('/api/tickets/:ticketId/procurement-requests', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+    console.log(`📦 Fetching procurement requests for ticket ${ticketId}`);
+
+    const requests = await db.collection('procurement_requests')
+      .find({ ticket_id: ticketId.toString() })
+      .sort({ created_at: -1 })
+      .toArray();
+
+    console.log(`✅ Found ${requests.length} procurement requests`);
+    
+    res.json({
+      success: true,
+      requests: requests
+    });
+  } catch (error) {
+    console.error('❌ Fetch procurement requests error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch procurement requests: ' + error.message 
+    });
+  }
+});
+
+// Get single procurement request
+app.get('/api/procurement-requests/:requestId', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    console.log(`📦 Fetching procurement request: ${requestId}`);
+
+    const request = await db.collection('procurement_requests').findOne({ 
+      _id: new ObjectId(requestId) 
+    });
+
+    if (!request) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Procurement request not found' 
+      });
+    }
+
+    res.json({
+      success: true,
+      request: request
+    });
+  } catch (error) {
+    console.error('❌ Fetch procurement request error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch procurement request: ' + error.message 
+    });
+  }
+});
+
+// Update procurement request status
+app.put('/api/procurement-requests/:requestId/status', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { status, admin_notes } = req.body;
+
+    console.log('🔄 Updating procurement request status:', requestId, 'to:', status);
+
+    // First get the current request to know who requested it
+    const currentRequest = await db.collection('procurement_requests').findOne({
+      _id: new ObjectId(requestId)
+    });
+
+    if (!currentRequest) {
+      return res.status(404).json({
+        success: false,
+        message: 'Procurement request not found'
+      });
+    }
+
+    const updateData = {
+      status: status,
+      updated_at: new Date()
+    };
+
+    if (admin_notes) {
+      updateData.admin_notes = admin_notes;
+    }
+
+    const result = await db.collection('procurement_requests').updateOne(
+      { _id: new ObjectId(requestId) },
+      { $set: updateData }
+    );
+
+    if (result.modifiedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Procurement request not found'
+      });
+    }
+
+    console.log('✅ Procurement request status updated');
+
+    // Create notification for status change
+    await createProcurementNotification(requestId, status, req.user.name);
+
+    res.json({
+      success: true,
+      message: 'Procurement request status updated successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Update procurement status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update procurement request status: ' + error.message
+    });
+  }
+});
+
+
+
+
+
+
+// ========== ANNOUNCEMENTS ROUTES ==========
+
+// Get all announcements
+app.get('/api/announcements', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    console.log('📢 Fetching announcements');
+    
+    const announcements = await db.collection('announcements')
+      .find({})
+      .sort({ created_at: -1 })
+      .toArray();
+
+    console.log(`✅ Found ${announcements.length} announcements`);
+    
+    res.json({
+      success: true,
+      announcements: announcements
+    });
+  } catch (error) {
+    console.error('❌ Get announcements error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch announcements: ' + error.message 
+    });
+  }
+});
+
+// Create new announcement (Admin only)
+app.post('/api/announcements', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
+  try {
+    const { title, content, priority } = req.body;
+    
+    console.log('📢 Creating new announcement:', { title, priority });
+    
+    if (!title || !content) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Title and content are required' 
+      });
+    }
+
+    const announcement = {
+      title,
+      content,
+      priority: priority || 'medium',
+      created_by: req.user.id,
+      created_by_name: req.user.name,
+      created_at: new Date(),
+      updated_at: new Date()
+    };
+
+    await db.collection('announcements').insertOne(announcement);
+    
+    console.log('✅ Announcement created successfully');
+    
+    res.status(201).json({
+      success: true,
+      message: 'Announcement created successfully',
+      announcement: announcement
+    });
+  } catch (error) {
+    console.error('❌ Create announcement error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to create announcement: ' + error.message 
+    });
+  }
+});
+
+// Update announcement (Admin only)
+app.put('/api/announcements/:id', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, content, priority } = req.body;
+    
+    console.log('📢 Updating announcement:', id);
+    
+    const result = await db.collection('announcements').updateOne(
+      { _id: new ObjectId(id) },
+      { 
+        $set: { 
+          title,
+          content,
+          priority,
+          updated_at: new Date()
+        } 
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Announcement not found' 
+      });
+    }
+
+    console.log('✅ Announcement updated successfully');
+    
+    res.json({
+      success: true,
+      message: 'Announcement updated successfully'
+    });
+  } catch (error) {
+    console.error('❌ Update announcement error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to update announcement: ' + error.message 
+    });
+  }
+});
+
+// Delete announcement (Admin only)
+app.delete('/api/announcements/:id', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    console.log('📢 Deleting announcement:', id);
+    
+    const result = await db.collection('announcements').deleteOne({ _id: new ObjectId(id) });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Announcement not found' 
+      });
+    }
+
+    console.log('✅ Announcement deleted successfully');
+    
+    res.json({
+      success: true,
+      message: 'Announcement deleted successfully'
+    });
+  } catch (error) {
+    console.error('❌ Delete announcement error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to delete announcement: ' + error.message 
+    });
+  }
+});
+
+
+
+
+
+// User backup their own data
+app.post('/api/user/backup-my-data', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    const user = await db.collection('users').findOne({ user_id: userId });
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    
+    const userTickets = await db.collection('tickets').find({ user_id: userId }).toArray();
+    const userComments = await db.collection('comments').find({ author_id: userId }).toArray();
+    const userLogs = await db.collection('ticket_logs').find({ changed_by: userId }).toArray();
+    const userNotifications = await db.collection('notifications').find({ user_id: userId }).toArray();
+    
+    const backupDoc = {
+      user_id: userId,
+      user_data: { ...user },
+      tickets: userTickets,
+      comments: userComments,
+      logs: userLogs,
+      notifications: userNotifications,
+      created_by: userId,
+      created_at: new Date(),
+      backup_type: 'manual_user_backup',
+      restored: false
+    };
+    
+    const result = await db.collection('user_backups').insertOne(backupDoc);
+    
+    res.json({
+      success: true,
+      message: 'Your data has been backed up successfully!',
+      backup_id: result.insertedId,
+      summary: {
+        tickets: userTickets.length,
+        comments: userComments.length,
+        logs: userLogs.length,
+        notifications: userNotifications.length
+      }
+    });
+  } catch (error) {
+    console.error('User backup error:', error);
+    res.status(500).json({ success: false, message: 'Backup failed' });
+  }
+});
+
+
+
 // ========== AI CLASSIFICATION FUNCTIONS ==========
 
 // Enhanced ML training data
+// ========== AI CLASSIFICATION - FULL ONLINE AI ==========
+
+// Updated training data with MORE examples for better accuracy
 const enhancedClassifier = new natural.BayesClassifier();
 
-// Extensive training data for better accuracy
+// Expanded training data
+// ========== ENHANCED AI CLASSIFICATION - FULL ONLINE AI ==========
+
+// Expanded training data with MORE hardware examples
+// ========== ENHANCED AI CLASSIFICATION - BETTER MAINTENANCE VS HARDWARE ==========
+
+// Expanded training data with CLEAR distinction between Maintenance and Hardware
 const trainingData = [
-  // Hardware issues (expanded)
+  // ===== MAINTENANCE ISSUES (MUST COME FIRST for priority) =====
+  ['system maintenance schedule downtime', 'Maintenance'],
+  ['preventive maintenance hardware software', 'Maintenance'],
+  ['server maintenance reboot required', 'Maintenance'],
+  ['network maintenance upgrade planned', 'Maintenance'],
+  ['storage maintenance cleanup required', 'Maintenance'],
+  ['backup maintenance verification needed', 'Maintenance'],
+  ['security maintenance patch management', 'Maintenance'],
+  ['database maintenance optimization required', 'Maintenance'],
+  ['application maintenance update deployment', 'Maintenance'],
+  ['infrastructure maintenance upgrade', 'Maintenance'],
+  ['scheduled maintenance window activities', 'Maintenance'],
+  ['emergency maintenance urgent repair', 'Maintenance'],
+  ['routine maintenance checklist tasks', 'Maintenance'],
+  ['software maintenance license renewal', 'Maintenance'],
+  ['system update patch installation', 'Maintenance'],
+  ['security update patch deployment', 'Maintenance'],
+  ['regular maintenance check schedule', 'Maintenance'],
+  ['monthly maintenance routine', 'Maintenance'],
+  ['weekly system maintenance', 'Maintenance'],
+  ['quarterly maintenance review', 'Maintenance'],
+  ['annual maintenance plan', 'Maintenance'],
+  ['preventive check maintenance', 'Maintenance'],
+  ['system health check maintenance', 'Maintenance'],
+  ['server update maintenance window', 'Maintenance'],
+  ['firmware update maintenance', 'Maintenance'],
+  ['software patch update maintenance', 'Maintenance'],
+  ['system upgrade maintenance plan', 'Maintenance'],
+  ['hardware replacement maintenance', 'Maintenance'],
+  ['equipment maintenance schedule', 'Maintenance'],
+  ['facility maintenance routine', 'Maintenance'],
+  ['it infrastructure maintenance', 'Maintenance'],
+  ['regular software updates maintenance', 'Maintenance'],
+  ['system cleanup maintenance', 'Maintenance'],
+  ['log cleanup maintenance', 'Maintenance'],
+  ['disk cleanup maintenance', 'Maintenance'],
+  ['database cleanup maintenance', 'Maintenance'],
+  ['cache clearing maintenance', 'Maintenance'],
+  ['temp file cleanup maintenance', 'Maintenance'],
+  ['system optimization maintenance', 'Maintenance'],
+  ['performance tuning maintenance', 'Maintenance'],
+  ['capacity planning maintenance', 'Maintenance'],
+  ['resource allocation maintenance', 'Maintenance'],
+  
+  // ===== HARDWARE ISSUES (Physical device problems) =====
   ['computer slow performance lagging freezing', 'Hardware'],
   ['laptop battery not charging power issue', 'Hardware'],
   ['printer not printing paper jam error', 'Hardware'],
@@ -383,8 +1605,59 @@ const trainingData = [
   ['speaker no sound audio issues', 'Hardware'],
   ['webcam not working camera failed', 'Hardware'],
   ['laptop screen cracked broken', 'Hardware'],
+  ['ram memory failure upgrade', 'Hardware'],
+  ['cpu processor overheating thermal', 'Hardware'],
+  ['power supply failure replacement', 'Hardware'],
+  ['motherboard issue boot failure', 'Hardware'],
+  ['graphics card gpu issue', 'Hardware'],
+  ['cd dvd drive not reading', 'Hardware'],
+  ['headphone jack broken', 'Hardware'],
+  ['bluetooth adapter not working', 'Hardware'],
+  ['touchpad not responding', 'Hardware'],
+  ['desktop computer wont start', 'Hardware'],
+  ['computer shuts down suddenly restarts', 'Hardware'],
+  ['system randomly restarts crashes', 'Hardware'],
+  ['computer keeps restarting looping', 'Hardware'],
+  ['device powers off randomly', 'Hardware'],
+  ['computer smells like burning', 'Hardware'],
+  ['laptop hinge broken loose', 'Hardware'],
+  ['power cord adapter broken', 'Hardware'],
+  ['screen backlight not working', 'Hardware'],
+  ['dead pixels on monitor', 'Hardware'],
+  ['computer case damaged', 'Hardware'],
+  ['liquid spill on keyboard', 'Hardware'],
+  ['broken usb connector port', 'Hardware'],
+  ['cpu fan not spinning', 'Hardware'],
+  ['graphics card fan loud noise', 'Hardware'],
+  ['power button not responding', 'Hardware'],
+  ['laptop keyboard keys stuck', 'Hardware'],
+  ['monitor has lines stripes', 'Hardware'],
+  ['screen flickers when moved', 'Hardware'],
+  ['laptop trackpad not clicking', 'Hardware'],
+  ['external hard drive not detected', 'Hardware'],
+  ['ssd drive failure', 'Hardware'],
+  ['ram stick faulty', 'Hardware'],
+  ['cmos battery dead', 'Hardware'],
+  ['power surge damaged computer', 'Hardware'],
+  ['monitor no signal detected', 'Hardware'],
+  ['computer freezing randomly', 'Hardware'],
+  ['laptop battery drains fast', 'Hardware'],
+  ['charger not working', 'Hardware'],
+  ['screen has dark spots', 'Hardware'],
+  ['keyboard backlight broken', 'Hardware'],
+  ['fan makes grinding noise', 'Hardware'],
+  ['computer wont boot', 'Hardware'],
+  ['bios error on startup', 'Hardware'],
+  ['computer stuck on loading screen', 'Hardware'],
+  ['device not recognized usb', 'Hardware'],
+  ['printer paper jam', 'Hardware'],
+  ['printer ink cartridge problem', 'Hardware'],
+  ['scanner not working', 'Hardware'],
+  ['fax machine broken', 'Hardware'],
+  ['projector lamp needs replacement', 'Hardware'],
+  ['ups battery needs replacement', 'Hardware'],
   
-  // Software issues (expanded)
+  // ===== SOFTWARE ISSUES =====
   ['software application crash error', 'Software'],
   ['program wont install installation failed', 'Software'],
   ['update failed cannot update system', 'Software'],
@@ -400,8 +1673,19 @@ const trainingData = [
   ['browser chrome firefox edge issues', 'Software'],
   ['operating system windows linux mac', 'Software'],
   ['driver update failed device', 'Software'],
+  ['software license expired renewal', 'Software'],
+  ['app not opening crashing startup', 'Software'],
+  ['software bug glitch error', 'Software'],
+  ['program uninstall failed', 'Software'],
+  ['software configuration settings', 'Software'],
+  ['windows update stuck', 'Software'],
+  ['mac os update failed', 'Software'],
+  ['application not responding', 'Software'],
+  ['error message popup dialog', 'Software'],
+  ['program keeps crashing closing', 'Software'],
+  ['software wont open', 'Software'],
   
-  // Network issues (expanded)
+  // ===== NETWORK ISSUES =====
   ['internet connection slow speed', 'Network'],
   ['wifi not connecting wireless network', 'Network'],
   ['vpn connection failed remote access', 'Network'],
@@ -417,8 +1701,13 @@ const trainingData = [
   ['firewall blocking application network', 'Network'],
   ['proxy server configuration issues', 'Network'],
   ['voip phone system issues', 'Network'],
+  ['lan connection dropped disconnected', 'Network'],
+  ['network latency ping high slow', 'Network'],
+  ['dhcp not assigning ip address', 'Network'],
+  ['network switch port failure', 'Network'],
+  ['cannot reach website server', 'Network'],
   
-  // Security issues (expanded)
+  // ===== SECURITY ISSUES =====
   ['virus malware detected infection', 'Security'],
   ['suspicious email phishing scam', 'Security'],
   ['firewall blocking access application', 'Security'],
@@ -435,7 +1724,7 @@ const trainingData = [
   ['security certificate errors', 'Security'],
   ['intrusion detection system alerts', 'Security'],
   
-  // Account issues (expanded)
+  // ===== ACCOUNT ISSUES =====
   ['user account locked disabled', 'Account'],
   ['permissions access denied folder', 'Account'],
   ['profile corrupted user settings', 'Account'],
@@ -451,8 +1740,10 @@ const trainingData = [
   ['account creation new user', 'Account'],
   ['group policy issues settings', 'Account'],
   ['single sign on sso problems', 'Account'],
-
-  // Database issues (NEW)
+  ['cant log in cannot login', 'Account'],
+  ['username password incorrect', 'Account'],
+  
+  // ===== DATABASE ISSUES =====
   ['database slow performance query optimization', 'Database'],
   ['sql server connection failed timeout', 'Database'],
   ['database backup failed recovery issues', 'Database'],
@@ -464,12 +1755,8 @@ const trainingData = [
   ['database migration upgrade problems', 'Database'],
   ['deadlock timeout transaction issues', 'Database'],
   ['database storage space running out', 'Database'],
-  ['index fragmentation optimization needed', 'Database'],
-  ['database security permissions access', 'Database'],
-  ['data import export backup restore', 'Database'],
-  ['database clustering high availability', 'Database'],
   
-  // Configuration issues (NEW)
+  // ===== CONFIGURATION ISSUES =====
   ['system configuration settings change', 'Configuration'],
   ['application configuration file error', 'Configuration'],
   ['server configuration optimization tuning', 'Configuration'],
@@ -480,171 +1767,282 @@ const trainingData = [
   ['configuration management tool issues', 'Configuration'],
   ['deployment configuration pipeline setup', 'Configuration'],
   ['load balancer configuration settings', 'Configuration'],
-  ['firewall rule configuration changes', 'Configuration'],
-  ['dns configuration domain name setup', 'Configuration'],
-  ['email server configuration smtp imap', 'Configuration'],
-  ['backup configuration schedule setup', 'Configuration'],
-  ['security policy configuration settings', 'Configuration'],
-  
-  // Maintenance issues (NEW)
-  ['system maintenance schedule downtime', 'Maintenance'],
-  ['preventive maintenance hardware software', 'Maintenance'],
-  ['server maintenance reboot required', 'Maintenance'],
-  ['network maintenance upgrade planned', 'Maintenance'],
-  ['storage maintenance cleanup required', 'Maintenance'],
-  ['backup maintenance verification needed', 'Maintenance'],
-  ['security maintenance patch management', 'Maintenance'],
-  ['database maintenance optimization required', 'Maintenance'],
-  ['application maintenance update deployment', 'Maintenance'],
-  ['infrastructure maintenance upgrade', 'Maintenance'],
-  ['scheduled maintenance window activities', 'Maintenance'],
-  ['emergency maintenance urgent repair', 'Maintenance'],
-  ['routine maintenance checklist tasks', 'Maintenance'],
-  ['hardware maintenance replacement parts', 'Maintenance'],
-  ['software maintenance license renewal', 'Maintenance']
 ];
 
-// Train the enhanced classifier
-console.log('🤖 Training AI classifier with enhanced dataset...');
+// Train the classifier
+console.log('🤖 Training AI classifier with ' + trainingData.length + ' examples...');
+
+// Create a new classifier instance to clear previous training
+const { BayesClassifier } = natural;
+// Reassign enhancedClassifier to a new instance
+Object.assign(enhancedClassifier, new BayesClassifier());
+
 trainingData.forEach(([text, category]) => {
   enhancedClassifier.addDocument(text, category);
 });
 enhancedClassifier.train();
 console.log('✅ AI classifier training completed');
 
-// Enhanced AI classification with OpenAI
+
+
+
+
+// ========== FULL ONLINE AI CLASSIFICATION ==========
 async function classifyTicketWithAI(description) {
   try {
-    // First try the local classifier
+    console.log('🤖 ========================================');
+    console.log('🤖 AI CLASSIFICATION REQUEST');
+    console.log('🤖 Description: "' + description.substring(0, 100) + (description.length > 100 ? '...' : '') + '"');
+    console.log('🤖 ========================================');
+    
+    // First try local classifier
     const localClassification = enhancedClassifier.getClassifications(description);
     const topLocalCategory = localClassification[0].label;
     const localConfidence = localClassification[0].value;
     
-    console.log(`🤖 Local AI Classification: ${topLocalCategory} (${(localConfidence * 100).toFixed(1)}% confidence)`);
+    console.log(`🤖 Local AI Top 3:`);
+    localClassification.slice(0, 3).forEach((c, i) => {
+      console.log(`   ${i+1}. ${c.label}: ${(c.value * 100).toFixed(1)}%`);
+    });
     
-    // If local confidence is high enough, use it
-    if (localConfidence > 0.7) {
+    // If local confidence is VERY high (>92%), use it
+    if (localConfidence > 0.92) {
+      console.log(`✅ Local classifier VERY HIGH confidence (${(localConfidence * 100).toFixed(1)}%), using it`);
       return { 
         issue_type: topLocalCategory, 
         confidence: localConfidence,
-        method: 'local'
+        method: 'local_high_confidence',
+        reason: 'Local classifier has very high confidence'
       };
     }
-
-    // Otherwise try OpenAI if API key is available
-    if (openai.apiKey && openai.apiKey !== 'your-openai-api-key-here') {
+    
+    // Try Gemini AI (FREE)
+    if (genAI) {
       try {
-        const completion = await openai.chat.completions.create({
-          model: "gpt-3.5-turbo",
-          messages: [
-            {
-              role: "system",
-              content: `You are an IT support ticket classification system. Classify the following ticket description into one of these categories: 
-              Hardware, Software, Network, Security, Account, Database, Configuration, Maintenance, Other.
-              
-              Return JSON format: { "issue_type": "category", "confidence": 0.95 }
-              
-              Hardware: Issues with physical devices (computers, printers, monitors, keyboards, etc.)
-              Software: Issues with applications, programs, operating systems
-              Network: Internet, WiFi, connectivity, VPN issues
-              Security: Viruses, malware, security breaches, access violations
-              Account: Login, password, user account, permission issues
-              Database: Data storage, retrieval, SQL, database performance
-              Configuration: System settings, setup, configuration changes
-              Maintenance: System updates, patches, routine maintenance
-              Other: Anything that doesn't fit above categories`
-            },
-            {
-              role: "user",
-              content: `Classify this ticket: "${description}"`
-            }
-          ],
-          response_format: { type: "json_object" }
-        });
-
-        const classification = JSON.parse(completion.choices[0].message.content);
-        console.log(`🤖 OpenAI Classification: ${classification.issue_type} (${(classification.confidence * 100).toFixed(1)}% confidence)`);
+        console.log('🌐 Attempting Google Gemini AI classification...');
         
-        return {
-          ...classification,
-          method: 'openai'
-        };
-      } catch (openaiError) {
-        console.error('OpenAI classification failed, using local:', openaiError);
-        // Fallback to local classification
-        return { 
-          issue_type: topLocalCategory, 
-          confidence: localConfidence,
-          method: 'local_fallback'
-        };
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        
+        const prompt = `You are an IT help desk ticket classifier. Classify this ticket into EXACTLY ONE category.
+
+CATEGORIES WITH EXAMPLES:
+- Hardware: Physical device is broken/faulty (computer shuts down, laptop restarts, printer broken, screen cracked, battery not charging, overheating, fan noise, keyboard not working, USB port damaged, power failure, RAM issues, CPU problems, hard drive failure, beeping sounds, liquid spills, burning smell, physical damage, monitor display issues)
+- Maintenance: Routine upkeep, updates, or scheduled work (system maintenance, preventive checks, scheduled updates, patch deployment, regular cleanup, server reboot for maintenance, firmware upgrades, planned downtime, routine tasks, system health checks, weekly/monthly maintenance, software updates, security patches, system optimization, disk cleanup, cache clearing)
+- Software: Application problems (program crashes, software error, installation failed, Microsoft Office problems, browser issues, app not opening, license expired, driver issues, Windows/Mac/Linux problems, software bug, error messages)
+- Network: Connection problems (no internet, WiFi not working, VPN failed, DNS issues, router problems, slow connection, ethernet disconnected, cannot reach server)
+- Security: Safety problems (virus, malware, hacking, phishing, antivirus alert, ransomware, data breach, suspicious activity, spam)
+- Account: Login problems (password reset, account locked, access denied, login failed, authentication, permissions, MFA problems)
+- Database: Data problems (SQL errors, database connection failed, query issues, data corruption, backup failure, MySQL/PostgreSQL/Oracle problems)
+- Configuration: Setup problems (settings incorrect, deployment failed, registry issues, environment variables, config changes)
+- Other: ONLY if absolutely none of the above fit
+
+CRITICAL DISTINCTION - MAINTENANCE vs HARDWARE:
+- "Need to schedule maintenance", "regular maintenance check", "routine maintenance" = MAINTENANCE
+- "Computer is broken", "laptop crashed", "hardware failed" = HARDWARE
+- "System update needed", "patch deployment", "upgrade scheduled" = MAINTENANCE
+- "hardware replacement maintenance" = If it's about SCHEDULING replacement = MAINTENANCE. If device ALREADY failed = HARDWARE.
+
+Ticket Description: "${description}"
+
+Return ONLY valid JSON (no markdown, just the JSON):
+{"issue_type":"CategoryName","confidence":0.95,"reason":"One sentence explanation"}`;
+
+        const result = await model.generateContent(prompt);
+        const response = result.response;
+        const text = response.text();
+        
+        console.log('🌐 Gemini raw response:', text.substring(0, 200));
+        
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try {
+            const classification = JSON.parse(jsonMatch[0]);
+            
+            const validCategories = ['Hardware', 'Software', 'Network', 'Security', 'Account', 'Database', 'Configuration', 'Maintenance', 'Other'];
+            
+            if (validCategories.includes(classification.issue_type)) {
+              console.log(`🌐 Gemini AI RESULT: ${classification.issue_type} (${(classification.confidence * 100).toFixed(1)}% confidence)`);
+              console.log(`📝 Reason: ${classification.reason || 'N/A'}`);
+              
+              return {
+                issue_type: classification.issue_type,
+                confidence: classification.confidence || 0.85,
+                method: 'gemini',
+                reason: classification.reason || ''
+              };
+            } else {
+              console.log(`⚠️ Invalid category: "${classification.issue_type}"`);
+            }
+          } catch (parseError) {
+            console.error('❌ JSON parse error:', parseError.message);
+          }
+        }
+      } catch (geminiError) {
+        console.error('❌ Gemini AI failed:', geminiError.message);
       }
-    } else {
-      console.log('🔑 OpenAI API key not configured, using local classifier');
+    }
+    
+    // If local confidence is decent (>70%), use it
+    if (localConfidence > 0.70) {
+      console.log(`✅ Local classifier decent confidence (${(localConfidence * 100).toFixed(1)}%), using it`);
       return { 
         issue_type: topLocalCategory, 
         confidence: localConfidence,
-        method: 'local_only'
+        method: 'local_decent_confidence',
+        reason: 'Local classifier has decent confidence'
       };
     }
+    
+    // Fallback to keyword-based
+    console.log('🔄 Falling back to keyword-based classification...');
+    return fallbackClassification(description);
+    
   } catch (error) {
-    console.error('AI classification error:', error);
-    // Fallback to rule-based classification
+    console.error('❌ All AI classification methods failed:', error);
     return fallbackClassification(description);
   }
 }
 
+// Enhanced fallback with MAINTENANCE as PRIORITY check
 function fallbackClassification(description) {
   const desc = description.toLowerCase();
-  const rules = [
-    { type: 'Hardware', keywords: ['computer', 'laptop', 'printer', 'monitor', 'keyboard', 'mouse', 'hardware', 'device', 'cpu', 'ram', 'storage', 'drive'] },
-    { type: 'Software', keywords: ['software', 'application', 'program', 'microsoft', 'word', 'excel', 'crash', 'error', 'install', 'update'] },
-    { type: 'Network', keywords: ['internet', 'wifi', 'network', 'connection', 'vpn', 'online', 'connectivity', 'ethernet'] },
-    { type: 'Security', keywords: ['virus', 'malware', 'security', 'hack', 'breach', 'password', 'security', 'antivirus'] },
-    { type: 'Account', keywords: ['login', 'account', 'password', 'user', 'access', 'permission', 'credentials'] },
-    { type: 'Database', keywords: ['database', 'data', 'sql', 'query', 'storage', 'backup'] },
-    { type: 'Configuration', keywords: ['configure', 'setting', 'setup', 'configuration', 'options'] },
-    { type: 'Maintenance', keywords: ['update', 'maintenance', 'patch', 'upgrade', 'cleanup'] }
+  
+  console.log('🔧 Running keyword-based fallback classification...');
+  
+  // CHECK MAINTENANCE FIRST (before Hardware)
+  const maintenanceKeywords = [
+    'maintenance', 'scheduled', 'routine', 'preventive', 'upgrade',
+    'cleanup', 'clean up', 'cleaning', 'optimization', 'optimize',
+    'patch', 'patching', 'service pack', 'firmware update',
+    'health check', 'healthcheck', 'audit', 'review',
+    'quarterly', 'monthly', 'weekly', 'annual', 'yearly',
+    'plan', 'planning', 'schedule', 'scheduling', 'window',
+    'downtime', 'outage window', 'change window',
+    'deployment', 'deploy', 'rollout', 'release',
+    'capacity planning', 'resource planning',
+    'log rotation', 'log cleanup', 'cache clearing',
+    'temp files', 'temporary files', 'disk cleanup',
+    'database cleanup', 'system cleanup',
+    'preventive check', 'regular check', 'routine check',
+    'maintenance mode', 'maintenance plan'
   ];
-
-  let bestMatch = { type: 'Other', confidence: 0.5 };
-  let matchCount = 0;
-
+  
+  let maintenanceCount = 0;
+  for (const keyword of maintenanceKeywords) {
+    if (desc.includes(keyword)) {
+      maintenanceCount++;
+    }
+  }
+  
+  // If 2 or more maintenance keywords found, classify as Maintenance
+  if (maintenanceCount >= 2) {
+    console.log(`🔧 MAINTENANCE detected (${maintenanceCount} keywords matched)`);
+    return { 
+      issue_type: 'Maintenance', 
+      confidence: Math.min(0.7 + (maintenanceCount * 0.08), 0.95),
+      method: 'fallback_maintenance_priority',
+      reason: `Matched ${maintenanceCount} maintenance keywords`
+    };
+  }
+  
+  // Check Hardware
+  const hardwareKeywords = [
+    'computer', 'laptop', 'printer', 'monitor', 'keyboard', 'mouse', 
+    'screen', 'battery', 'power', 'fan', 'usb', 'speaker', 'webcam', 
+    'touchpad', 'desktop', 'graphics', 'gpu', 'motherboard', 'cpu', 'ram',
+    'shuts down', 'shutdown', 'restarts', 'restarting', 'turns off',
+    'overheating', 'overheat', 'burning smell', 'smoke',
+    'blue screen', 'bsod', 'black screen', 'no display',
+    'beeping', 'beep', 'clicking sound', 'noise', 'loud',
+    'cracked', 'broken', 'damaged', 'liquid spill', 'water damage',
+    'charging', 'charger', 'power cord', 'adapter', 'plug',
+    'hinge', 'loose', 'wobbly', 'stand',
+    'dead pixel', 'flickering', 'lines on screen', 'backlight',
+    'hard drive', 'ssd', 'storage', 'disk', 'hdd',
+    'not turning on', 'wont turn on', 'no power', 'dead',
+    'freezes and restarts', 'crashes and reboots', 'keeps restarting',
+    'randomly turns off', 'suddenly shuts', 'unexpectedly shuts',
+    'powers down', 'powered down', 'shut down randomly',
+    'grinding', 'screeching', 'whining noise'
+  ];
+  
+  let hardwareCount = 0;
+  for (const keyword of hardwareKeywords) {
+    if (desc.includes(keyword)) {
+      hardwareCount++;
+    }
+  }
+  
+  if (hardwareCount >= 2) {
+    console.log(`🔧 HARDWARE detected (${hardwareCount} keywords matched)`);
+    return { 
+      issue_type: 'Hardware', 
+      confidence: Math.min(0.7 + (hardwareCount * 0.08), 0.95),
+      method: 'fallback_hardware_priority',
+      reason: `Matched ${hardwareCount} hardware keywords`
+    };
+  }
+  
+  // Check other categories...
+  const rules = [
+    { type: 'Software', keywords: ['software', 'application', 'program', 'microsoft', 'word', 'excel', 'crash', 'error message', 'install', 'app', 'bug', 'glitch', 'license', 'adobe', 'browser', 'chrome', 'firefox', 'driver', 'windows', 'mac', 'linux', 'not opening', 'not responding', 'frozen', 'stuck'] },
+   { type: 'Network', keywords: [
+  'internet', 'wifi', 'network', 'connection', 'vpn', 'dns', 'router', 'modem', 
+  'ethernet', 'bandwidth', 'latency', 'ping', 'signal', 'wireless', 
+  'no internet', 'cannot connect', 'disconnected', 'slow internet', 'weak signal', 'no wifi',
+  'downloading', 'download', 'browsing', 'browse', 'browser slow', 'slow browsing',
+  'streaming', 'buffering', 'uploading', 'upload slow', 'download slow',
+  'web page', 'website', 'url', 'http', 'https', 'web browsing',
+  'online', 'offline', 'no connection', 'limited connectivity',
+  'network slow', 'network speed', 'internet speed', 'speed test',
+  'cannot reach', 'unreachable', 'timeout', 'timed out', 'connection refused',
+  'proxy', 'gateway', 'subnet', 'lan', 'wan', 'isp',
+  'tcp', 'udp', 'packet loss', 'jitter', 'throughput',
+  'port', 'firewall blocking', 'nat', 'dhcp'
+] },
+    { type: 'Account', keywords: ['login', 'account', 'password', 'user', 'access', 'permission', 'credentials', 'locked', 'disabled', 'forgot', 'reset', 'profile', 'sign in', 'log in', 'authentication', 'mfa', 'access denied', 'permission denied'] },
+    { type: 'Database', keywords: ['database', 'data', 'sql', 'query', 'mysql', 'postgresql', 'oracle', 'mongodb', 'table', 'index', 'deadlock', 'transaction', 'corrupted', 'data loss', 'backup'] },
+    { type: 'Configuration', keywords: ['configure', 'setting', 'setup', 'configuration', 'options', 'registry', 'deployment', 'environment', 'config file', 'settings change', 'reconfigure'] }
+  ];
+  
+  let bestMatch = { type: 'Other', confidence: 0.3, keywordCount: 0 };
+  
   for (const rule of rules) {
-    const matches = rule.keywords.filter(keyword => desc.includes(keyword)).length;
-    if (matches > matchCount) {
-      matchCount = matches;
+    let matchCount = 0;
+    for (const keyword of rule.keywords) {
+      if (desc.includes(keyword)) {
+        matchCount++;
+      }
+    }
+    if (matchCount > bestMatch.keywordCount) {
       bestMatch = { 
         type: rule.type, 
-        confidence: Math.min(0.3 + (matches * 0.1), 0.9) 
+        confidence: Math.min(0.3 + (matchCount * 0.12), 0.88),
+        keywordCount: matchCount
       };
     }
   }
 
-  console.log(`🔧 Fallback Classification: ${bestMatch.type} (${(bestMatch.confidence * 100).toFixed(1)}% confidence)`);
-  return { ...bestMatch, method: 'fallback' };
+  // If hardware came second but has keywords, prefer it over Other
+  if (bestMatch.type === 'Other' && hardwareCount >= 1) {
+    console.log(`🔧 Defaulting to Hardware (${hardwareCount} keywords vs Other)`);
+    return { 
+      issue_type: 'Hardware', 
+      confidence: 0.5,
+      method: 'fallback_hardware_default',
+      reason: `Matched ${hardwareCount} hardware keywords, no other category matched`
+    };
+  }
+  
+  console.log(`🔧 Fallback RESULT: ${bestMatch.type} (${bestMatch.keywordCount} keywords, ${(bestMatch.confidence * 100).toFixed(1)}% confidence)`);
+  
+  return { 
+    issue_type: bestMatch.type, 
+    confidence: bestMatch.confidence,
+    method: 'fallback_keywords',
+    reason: `Matched ${bestMatch.keywordCount} keywords`
+  };
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // ========== QUEUE MANAGEMENT FUNCTIONS ==========
 
@@ -662,20 +2060,6 @@ const enhancedTeamMap = {
   'Maintenance': 8,
   'Other': 9
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // ========== FIXED: Check officer availability with <3 tickets rule ==========
 async function checkOfficerAvailabilityForAllTeams(teamId) {
@@ -754,6 +2138,7 @@ async function checkOfficerAvailabilityForAllTeams(teamId) {
 
 
 
+
 // Enhanced ticket submission with automatic assignment for ALL teams
 app.post('/api/submit-ticket', authenticateToken, requireDatabase, ticketUpload.single('attachment'), async (req, res) => {
   try {
@@ -777,69 +2162,86 @@ app.post('/api/submit-ticket', authenticateToken, requireDatabase, ticketUpload.
     // Get team ID for the issue type
     const teamId = enhancedTeamMap[issueType] || 9;
 
+    // Check if any officer in this team is available (has less than 3 active tickets)
+    const availableOfficer = await checkOfficerAvailabilityForAllTeams(teamId);
 
+    let assignedTo = null;
+    let status = 'Queued';
+    let queuePosition = null;
+    let estimatedWaitTime = null;
+    let assignmentMessage = '';
 
+    if (availableOfficer) {
+      // Direct assignment to available officer (has <3 tickets)
+      assignedTo = availableOfficer.user_id;
+      status = 'In Progress';
+      assignmentMessage = `Ticket submitted and assigned to ${availableOfficer.name}! 🎯 (${availableOfficer.active_tickets_count}/3 tickets)`;
+      console.log(`✅ Direct assignment to ${availableOfficer.name} (${availableOfficer.active_tickets_count}/3 active tickets)`);
+      
+     
+    } else {
+      // Place in queue - no available officers in this team (all have ≥3 tickets)
+      status = 'Queued';
+      
+      // Calculate queue position and wait time
+      const queueCount = await db.collection('tickets').countDocuments({ 
+        status: 'Queued', 
+        team_id: teamId 
+      });
+      
+      queuePosition = queueCount + 1;
+      estimatedWaitTime = calculateWaitTime(issueType, queuePosition);
+      assignmentMessage = `Ticket submitted and placed in queue. Position: ${queuePosition}. Estimated wait: ${estimatedWaitTime} business days. ⏳ (All officers have 3+ tickets)`;
+      console.log(`⏳ Ticket queued for ${issueType} team at position ${queuePosition} - ALL officers have 3+ active tickets`);
+    }
 
+// Insert ticket
+const ticketId = await getNextSequence('ticketId');  // This line should come FIRST
+const ticketDoc = {
+  _id: ticketId,
+  ticket_id: ticketId,
+  user_id: userId,
+  description,
+  priority,
+  issue_type: issueType,
+  status,
+  team_id: teamId,
+  assigned_to: assignedTo,
+  attachment,
+  steps_to_reproduce: steps_to_reproduce || null,
+  additional_notes: additional_notes || null,
+  ai_confidence: confidence,
+  queue_position: queuePosition,
+  estimated_wait_days: estimatedWaitTime,
+  in_queue: status === 'Queued',
+  assigned_at: assignedTo ? new Date() : null,
+  created_at: new Date(),
+  updated_at: new Date()
+};
 
+await db.collection('tickets').insertOne(ticketDoc);
 
-    // === REPLACE THIS PART IN YOUR SUBMIT TICKET ROUTE ===
-
-// Check if any officer in this team is available (has less than 3 active tickets)
-const availableOfficer = await checkOfficerAvailabilityForAllTeams(teamId);
-
-let assignedTo = null;
-let status = 'Queued';
-let queuePosition = null;
-let estimatedWaitTime = null;
-let assignmentMessage = '';
-
+// ✅ MOVED: Create notification for the assigned officer - NOW ticketId is available
 if (availableOfficer) {
-  // Direct assignment to available officer (has <3 tickets)
-  assignedTo = availableOfficer.user_id;
-  status = 'In Progress';
-  assignmentMessage = `Ticket submitted and assigned to ${availableOfficer.name}! 🎯 (${availableOfficer.active_tickets_count}/3 tickets)`;
-  console.log(`✅ Direct assignment to ${availableOfficer.name} (${availableOfficer.active_tickets_count}/3 active tickets)`);
-} else {
-  // Place in queue - no available officers in this team (all have ≥3 tickets)
-  status = 'Queued';
-  
-  // Calculate queue position and wait time
-  const queueCount = await db.collection('tickets').countDocuments({ 
-    status: 'Queued', 
-    team_id: teamId 
+  await createComprehensiveNotification({
+    user_id: availableOfficer.user_id,
+    title: 'New Ticket Assigned',
+    message: `You have been assigned a new ${issueType} ticket: "${description.substring(0, 100)}..."`,
+    type: 'ticket_assigned',
+    related_ticket_id: ticketId,  // ← NOW this works correctly
+    priority: 'high'
   });
-  
-  queuePosition = queueCount + 1;
-  estimatedWaitTime = calculateWaitTime(issueType, queuePosition);
-  assignmentMessage = `Ticket submitted and placed in queue. Position: ${queuePosition}. Estimated wait: ${estimatedWaitTime} business days. ⏳ (All officers have 3+ tickets)`;
-  console.log(`⏳ Ticket queued for ${issueType} team at position ${queuePosition} - ALL officers have 3+ active tickets`);
 }
 
-    // Insert ticket
-    const ticketId = await getNextSequence('ticketId');
-    const ticketDoc = {
-      _id: ticketId,
-      ticket_id: ticketId,
-      user_id: userId,
-      description,
-      priority,
-      issue_type: issueType,
-      status,
-      team_id: teamId,
-      assigned_to: assignedTo,
-      attachment,
-      steps_to_reproduce: steps_to_reproduce || null,
-      additional_notes: additional_notes || null,
-      ai_confidence: confidence,
-      queue_position: queuePosition,
-      estimated_wait_days: estimatedWaitTime,
-      in_queue: status === 'Queued',
-      assigned_at: assignedTo ? new Date() : null,
-      created_at: new Date(),
-      updated_at: new Date()
-    };
-
-    await db.collection('tickets').insertOne(ticketDoc);
+// Create notification for the user
+await createComprehensiveNotification({
+  user_id: userId,
+  title: 'Ticket Submitted Successfully',
+  message: `Your ${issueType} ticket has been ${assignedTo ? 'assigned to an officer' : 'placed in queue'}. ${assignmentMessage}`,
+  type: 'ticket_created',
+  related_ticket_id: ticketId,  // ← This also works now
+  priority: 'medium'
+});
 
     // Log ticket creation
     await db.collection('ticket_logs').insertOne({
@@ -886,9 +2288,6 @@ if (availableOfficer) {
     });
   }
 });
-
-
-
 
 
 
@@ -982,6 +2381,26 @@ async function processTicketAssignment(ticketId) {
         }
       );
 
+      // Create notification for the officer
+    await createComprehensiveNotification({
+  user_id: ticket.user_id,
+  title: 'Ticket Resolved',
+  message: `Your ticket #${ticketId} has been resolved by ${req.user.name}. Please review and close the ticket if satisfied.`,
+  type: 'ticket_resolved',
+  related_ticket_id: parseInt(ticketId),
+  priority: 'high'
+});
+
+      // Create notification for the user
+      await createComprehensiveNotification({
+  user_id: ticket.user_id,
+  title: 'Ticket Resolved',
+  message: `Your ticket #${ticketId} has been resolved by ${req.user.name}. Please review and close the ticket if satisfied.`,
+  type: 'ticket_resolved',
+  related_ticket_id: parseInt(ticketId),
+  priority: 'high'
+});
+
       // Log the assignment
       await db.collection('ticket_logs').insertOne({
         log_id: await getNextSequence('logId'),
@@ -1002,14 +2421,6 @@ async function processTicketAssignment(ticketId) {
     return false;
   }
 }
-
-
-
-
-
-
-
-
 
 // ========== FIXED: Enhanced process ALL queued tickets automatically ==========
 async function processAllQueuedTickets() {
@@ -1051,13 +2462,6 @@ async function processAllQueuedTickets() {
   }
 }
 
-
-
-
-
-
-
-
 // Calculate wait time based on queue position
 function calculateWaitTime(issueType, queuePosition) {
   const baseTimes = {
@@ -1068,30 +2472,6 @@ function calculateWaitTime(issueType, queuePosition) {
   const additionalDays = Math.floor(queuePosition / 2);
   return Math.max(1, baseDays + additionalDays);
 }
-
-// Auto-process queue every 20 seconds
-setInterval(async () => {
-  try {
-    if (isDatabaseConnected) {
-      const assignedCount = await processAllQueuedTickets();
-      if (assignedCount > 0) {
-        console.log(`🔄 Background assignment: ${assignedCount} tickets assigned`);
-      }
-    }
-  } catch (error) {
-    console.error('Background queue processing error:', error);
-  }
-}, 20 * 1000);
-
-
-
-
-
-
-
-
-
-
 
 // ========== ADMIN DELETE TICKET ROUTE ==========
 
@@ -1115,6 +2495,10 @@ app.delete('/api/admin/tickets/:ticketId', authenticateToken, requireAdmin, requ
       // Delete logs without transaction
       const logsResult = await db.collection('ticket_logs').deleteMany({ ticket_id: parseInt(ticketId) });
       console.log(`✅ Logs deleted for ticket ${ticketId}: ${logsResult.deletedCount} logs`);
+      
+      // Delete notifications related to this ticket
+      const notificationsResult = await db.collection('notifications').deleteMany({ related_ticket_id: parseInt(ticketId) });
+      console.log(`✅ Notifications deleted for ticket ${ticketId}: ${notificationsResult.deletedCount} notifications`);
       
       // Delete the ticket
       const result = await db.collection('tickets').deleteOne({ ticket_id: parseInt(ticketId) });
@@ -1142,17 +2526,6 @@ app.delete('/api/admin/tickets/:ticketId', authenticateToken, requireAdmin, requ
     });
   }
 });
-
-
-
-
-
-
-
-
-
-
-
 
 // ========== PUBLIC ROUTES ==========
 
@@ -1235,11 +2608,22 @@ app.get('/api/users/:userId', authenticateToken, requireDatabase, async (req, re
   }
 });
 
+
+
+
+
+
+
+
+
+
 // Public Registration endpoint
+// Public Registration endpoint - WITH EMAIL NOTIFICATIONS
+// Public Registration endpoint - WITH CREDENTIALS IN EMAIL
 app.post('/api/register', upload.single('avatar'), requireDatabase, async (req, res) => {
   try {
     const { name, email, password, confirm_password, phone_number, team_id, role = 'user' } = req.body;
-    console.log(`Register request: ${JSON.stringify(req.body)} at ${new Date().toISOString()}`);
+    console.log(`Register request: ${JSON.stringify({ name, email, role })} at ${new Date().toISOString()}`);
     
     if (!name || !email || !password || !confirm_password) {
       return res.status(400).json({ success: false, message: 'Name, email, password, and confirm password are required' });
@@ -1268,6 +2652,8 @@ app.post('/api/register', upload.single('avatar'), requireDatabase, async (req, 
       password: hashedPassword,
       role,
       phone_number: phone_number || null,
+      department: req.body.department || '',
+      position: req.body.position || '',
       team_id: team_id ? parseInt(team_id) : null,
       avatar_path,
       assigned_tickets_count: 0,
@@ -1277,22 +2663,94 @@ app.post('/api/register', upload.single('avatar'), requireDatabase, async (req, 
     
     await db.collection('users').insertOne(userDoc);
     
+    // 🔥 SEND WELCOME EMAIL WITH LOGIN CREDENTIALS
+    try {
+      const welcomeHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+          <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
+            <h1 style="color: white; margin: 0;">🎉 Welcome to IT Help Desk!</h1>
+          </div>
+          <div style="padding: 20px;">
+            <h2 style="color: #333;">Hello ${name},</h2>
+            <p style="font-size: 16px; color: #555; line-height: 1.6;">
+              Your account has been successfully created in the IT Help Desk System.
+            </p>
+            <div style="background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <h3 style="color: #856404; margin-top: 0;">📋 Your Login Credentials:</h3>
+              <p style="margin: 5px 0; color: #856404; font-size: 14px;">
+                <strong>Email:</strong> ${email}<br>
+                <strong>Password:</strong> ${password}<br>
+                <strong>Login URL:</strong> <a href="http://localhost:3000/login" style="color: #007bff;">http://localhost:3000/login</a>
+              </p>
+              <p style="margin: 10px 0 0 0; color: #856404; font-size: 12px;">
+                ⚠️ Please keep your credentials safe. You can change your password after logging in.
+              </p>
+            </div>
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <p style="margin: 0; color: #666; font-size: 14px;">
+                <strong>Name:</strong> ${name}<br>
+                <strong>Email:</strong> ${email}<br>
+                <strong>Role:</strong> ${role}<br>
+                <strong>Account Created:</strong> ${new Date().toLocaleString()}
+              </p>
+            </div>
+            <p style="color: #888; font-size: 14px;">
+              You can now log in and submit support tickets.
+            </p>
+          </div>
+          <div style="background-color: #f8f9fa; padding: 15px; border-radius: 0 0 10px 10px; text-align: center;">
+            <p style="margin: 0; color: #666; font-size: 12px;">
+              Ethiopian Statistical Service IT Help Desk<br>
+              This is an automated message, please do not reply.
+            </p>
+          </div>
+        </div>
+      `;
+      
+      const mailOptions = {
+        from: '"IT Help Desk" <hussenseid670@gmail.com>',
+        to: email,
+        subject: '🎉 Welcome to IT Help Desk - Your Account is Ready!',
+        html: welcomeHtml
+      };
+      
+      await transporter.sendMail(mailOptions);
+      console.log(`✅ Welcome email with credentials sent to: ${email}`);
+    } catch (emailError) {
+      console.error('❌ Welcome email failed:', emailError.message);
+    }
+
+    // 🔥 NOTIFY ADMIN
+    try {
+      await notifyAdmin('👤 New User Registration', 
+        `A new user has registered on the IT Help Desk System.`, {
+        userName: name,
+        userEmail: email,
+        action: 'user_registration'
+      });
+    } catch (adminEmailError) {
+      console.error('❌ Admin notification failed:', adminEmailError.message);
+    }
+    
     const newUser = await db.collection('users').findOne(
       { user_id: userId },
       { projection: { password: 0 } }
     );
     
-    console.log(`User registered successfully: ${JSON.stringify(newUser)} at ${new Date().toISOString()}`);
     res.status(201).json({
       success: true,
       message: 'User registered successfully',
       user: newUser,
     });
   } catch (error) {
-    console.error(`Registration error at ${new Date().toISOString()}:`, error);
+    console.error(`Registration error:`, error);
     res.status(500).json({ success: false, message: 'Server error during registration: ' + error.message });
   }
 });
+
+
+
+
 
 // Login endpoint - UPDATED VERSION
 app.post('/api/login', requireDatabase, async (req, res) => {
@@ -1363,11 +2821,18 @@ app.post('/api/login', requireDatabase, async (req, res) => {
   }
 });
 
+
+
+
+
 // Admin register regular user endpoint
+// Admin register regular user endpoint - WITH EMAIL NOTIFICATIONS
+// Admin register user endpoint - WITH CREDENTIALS IN EMAIL
+// Admin register regular user endpoint - WITH CREDENTIALS TO BOTH USER AND ADMIN
 app.post('/api/admin/register-user', authenticateToken, requireAdmin, requireDatabase, upload.single('avatar'), async (req, res) => {
   try {
     const { name, email, password, confirm_password, phone_number, team_id, role = 'user' } = req.body;
-    console.log(`Admin user register request: ${JSON.stringify(req.body)} at ${new Date().toISOString()}`);
+    console.log(`Admin creating user: ${JSON.stringify({ name, email, role })} at ${new Date().toISOString()}`);
     
     if (!name || !email || !password || !confirm_password) {
       return res.status(400).json({ success: false, message: 'Name, email, password, and confirm password are required' });
@@ -1396,6 +2861,8 @@ app.post('/api/admin/register-user', authenticateToken, requireAdmin, requireDat
       password: hashedPassword,
       role,
       phone_number: phone_number || null,
+      department: req.body.department || '',
+      position: req.body.position || '',
       team_id: team_id ? parseInt(team_id) : null,
       avatar_path,
       assigned_tickets_count: 0,
@@ -1405,22 +2872,153 @@ app.post('/api/admin/register-user', authenticateToken, requireAdmin, requireDat
     
     await db.collection('users').insertOne(userDoc);
     
+    const adminName = req.user.name;
+    const adminEmail = req.user.email;
+
+    // 🔥 SEND WELCOME EMAIL TO THE NEW USER (WITH CREDENTIALS)
+    try {
+      const welcomeHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+          <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
+            <h1 style="color: white; margin: 0;">🎉 Welcome to IT Help Desk!</h1>
+          </div>
+          <div style="padding: 20px;">
+            <h2 style="color: #333;">Hello ${name},</h2>
+            <p style="font-size: 16px; color: #555; line-height: 1.6;">
+              Your account has been created by an administrator in the IT Help Desk System.
+            </p>
+            <div style="background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <h3 style="color: #856404; margin-top: 0;">📋 Your Login Credentials:</h3>
+              <p style="margin: 5px 0; color: #856404; font-size: 14px;">
+                <strong>Email:</strong> ${email}<br>
+                <strong>Password:</strong> ${password}<br>
+                <strong>Login URL:</strong> <a href="http://localhost:3000/login" style="color: #007bff;">http://localhost:3000/login</a>
+              </p>
+              <p style="margin: 10px 0 0 0; color: #856404; font-size: 12px;">
+                ⚠️ Please change your password after first login for security.
+              </p>
+            </div>
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <p style="margin: 0; color: #666; font-size: 14px;">
+                <strong>Name:</strong> ${name}<br>
+                <strong>Email:</strong> ${email}<br>
+                <strong>Role:</strong> ${role}<br>
+                <strong>Created By:</strong> Admin (${adminName})<br>
+                <strong>Account Created:</strong> ${new Date().toLocaleString()}
+              </p>
+            </div>
+            <p style="color: #888; font-size: 14px;">
+              You can now log in and submit support tickets.
+            </p>
+          </div>
+          <div style="background-color: #f8f9fa; padding: 15px; border-radius: 0 0 10px 10px; text-align: center;">
+            <p style="margin: 0; color: #666; font-size: 12px;">
+              Ethiopian Statistical Service IT Help Desk<br>
+              This is an automated message, please do not reply.
+            </p>
+          </div>
+        </div>
+      `;
+      
+      const mailOptions = {
+        from: '"IT Help Desk" <hussenseid670@gmail.com>',
+        to: email,
+        subject: '🎉 Welcome to IT Help Desk - Account Created by Admin',
+        html: welcomeHtml
+      };
+      
+      await transporter.sendMail(mailOptions);
+      console.log(`✅ Welcome email with credentials sent to user: ${email}`);
+    } catch (emailError) {
+      console.error('❌ Welcome email to user failed:', emailError.message);
+    }
+
+    // 🔥 SEND CONFIRMATION EMAIL TO THE ADMIN WITH THE PASSWORD THEY SET
+    try {
+      const adminConfirmHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+          <div style="background: #28a745; padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
+            <h1 style="color: white; margin: 0;">✅ User Created Successfully</h1>
+          </div>
+          <div style="padding: 20px;">
+            <h2 style="color: #333;">Hello ${adminName},</h2>
+            <p style="font-size: 16px; color: #555; line-height: 1.6;">
+              You have successfully created a new user account in the IT Help Desk System.
+            </p>
+            <div style="background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <h3 style="color: #856404; margin-top: 0;">📋 User Credentials (for your records):</h3>
+              <p style="margin: 5px 0; color: #856404; font-size: 14px;">
+                <strong>Name:</strong> ${name}<br>
+                <strong>Email:</strong> ${email}<br>
+                <strong>Password Set:</strong> ${password}<br>
+                <strong>Role:</strong> ${role}<br>
+                <strong>User ID:</strong> ${userId}
+              </p>
+              <p style="margin: 10px 0 0 0; color: #856404; font-size: 12px;">
+                📝 Please keep these credentials for your records. The user has also received this information.
+              </p>
+            </div>
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <p style="margin: 0; color: #666; font-size: 14px;">
+                <strong>Created By:</strong> ${adminName} (You)<br>
+                <strong>Created At:</strong> ${new Date().toLocaleString()}
+              </p>
+            </div>
+          </div>
+          <div style="background-color: #f8f9fa; padding: 15px; border-radius: 0 0 10px 10px; text-align: center;">
+            <p style="margin: 0; color: #666; font-size: 12px;">
+              Ethiopian Statistical Service IT Help Desk - Admin Confirmation
+            </p>
+          </div>
+        </div>
+      `;
+      
+      const adminMailOptions = {
+        from: '"IT Help Desk" <hussenseid670@gmail.com>',
+        to: adminEmail || 'seidhussen0729@gmail.com',
+        subject: `✅ User Created: ${name} (${email}) - Credentials Included`,
+        html: adminConfirmHtml
+      };
+      
+      await transporter.sendMail(adminMailOptions);
+      console.log(`✅ Confirmation email with credentials sent to admin: ${adminEmail}`);
+    } catch (emailError) {
+      console.error('❌ Admin confirmation email failed:', emailError.message);
+    }
+
+    // 🔥 ALSO NOTIFY SUPER ADMIN (seidhussen0729@gmail.com)
+    try {
+      await notifyAdmin('👤 New User Created by Admin', 
+        `Admin ${adminName} created a new user: ${name} (${email}), Role: ${role}. Password set: ${password}`, {
+        userName: name,
+        userEmail: email,
+        action: 'admin_created_user'
+      });
+      console.log('✅ Super admin notified about new user creation');
+    } catch (superAdminEmailError) {
+      console.error('❌ Super admin notification failed:', superAdminEmailError.message);
+    }
+    
     const newUser = await db.collection('users').findOne(
       { user_id: userId },
       { projection: { password: 0 } }
     );
     
-    console.log(`User registered successfully by admin: ${JSON.stringify(newUser)} at ${new Date().toISOString()}`);
+    console.log(`User registered successfully by admin: ${name} (${email})`);
     res.status(201).json({
       success: true,
       message: 'User registered successfully',
       user: newUser,
     });
   } catch (error) {
-    console.error(`Admin user registration error at ${new Date().toISOString()}:`, error);
+    console.error(`Admin user registration error:`, error);
     res.status(500).json({ success: false, message: 'Server error during registration: ' + error.message });
   }
 });
+
+
+
+
 
 // ========== FIXED PROFILE & PASSWORD ROUTES ==========
 
@@ -1456,18 +3054,15 @@ app.get('/api/profile/:userId', authenticateToken, requireDatabase, async (req, 
 });
 
 // Update user profile by ID (FIXED ROUTE - SINGLE VERSION)
+// Update user profile by ID - WITH EMAIL NOTIFICATION
 app.put('/api/profile/:userId', authenticateToken, requireDatabase, upload.single('avatar'), async (req, res) => {
   try {
     const { userId } = req.params;
     const { name, email, phone_number, team_id } = req.body;
     
-    console.log(`🔄 Profile update for userId: ${userId} by user ${req.user.id}`, {
-      name, email, phone_number, team_id, hasAvatar: !!req.file
-    });
+    console.log(`🔄 Profile update for userId: ${userId} by user ${req.user.id}`);
     
-    // Check permissions
     if (req.user.id !== parseInt(userId) && req.user.role !== 'admin') {
-      console.log(`❌ Access denied: User ${req.user.id} cannot update profile of user ${userId}`);
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
     
@@ -1475,13 +3070,11 @@ app.put('/api/profile/:userId', authenticateToken, requireDatabase, upload.singl
       return res.status(400).json({ success: false, message: 'Name and email are required' });
     }
     
-    // Check if user exists
     const existingUser = await db.collection('users').findOne({ user_id: parseInt(userId) });
     if (!existingUser) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
     
-    // Check if email is already taken by another user
     if (email && email !== existingUser.email) {
       const emailUser = await db.collection('users').findOne({ 
         email, 
@@ -1496,24 +3089,21 @@ app.put('/api/profile/:userId', authenticateToken, requireDatabase, upload.singl
       name,
       email,
       phone_number: phone_number || null,
+      department: req.body.department || '',
+      position: req.body.position || '',
       updated_at: new Date()
     };
     
-    // Handle avatar upload
     if (req.file) {
       updateFields.avatar_path = 'assets/avatars/' + req.file.filename;
-      
-      // Delete old avatar if exists and not default
       if (existingUser.avatar_path && existingUser.avatar_path !== 'assets/default_avatar.png') {
         const oldAvatarPath = path.join(__dirname, existingUser.avatar_path);
         if (fs.existsSync(oldAvatarPath)) {
           fs.unlinkSync(oldAvatarPath);
-          console.log(`🗑️ Old avatar deleted: ${existingUser.avatar_path}`);
         }
       }
     }
     
-    // Only allow admin/senior to change team_id
     if (team_id !== undefined && (req.user.role === 'admin' || req.user.role === 'senior')) {
       updateFields.team_id = team_id ? parseInt(team_id) : null;
     }
@@ -1525,6 +3115,92 @@ app.put('/api/profile/:userId', authenticateToken, requireDatabase, upload.singl
     
     if (result.matchedCount === 0) {
       return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    
+    // 🔥 SEND PROFILE UPDATE EMAIL
+    try {
+      const changesDetected = [];
+      if (name !== existingUser.name) changesDetected.push(`Name: "${existingUser.name}" → "${name}"`);
+      if (email !== existingUser.email) changesDetected.push(`Email: "${existingUser.email}" → "${email}"`);
+      if (phone_number !== existingUser.phone_number) changesDetected.push('Phone number updated');
+      if (req.file) changesDetected.push('Profile picture updated');
+      
+      const changesText = changesDetected.length > 0 
+        ? changesDetected.map(c => `• ${c}`).join('<br>')
+        : '• Profile information updated';
+      
+      const profileUpdateHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+          <div style="background: #007bff; padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
+            <h1 style="color: white; margin: 0;">📝 Profile Updated</h1>
+          </div>
+          <div style="padding: 20px;">
+            <h2 style="color: #333;">Hello ${name},</h2>
+            <p style="font-size: 16px; color: #555; line-height: 1.6;">
+              Your profile information has been updated successfully.
+            </p>
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <p style="margin: 0; color: #666; font-size: 14px;">
+                <strong>Changes Made:</strong><br>
+                ${changesText}
+              </p>
+            </div>
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <p style="margin: 0; color: #666; font-size: 14px;">
+                <strong>Updated Profile:</strong><br>
+                <strong>Name:</strong> ${name}<br>
+                <strong>Email:</strong> ${email}<br>
+                <strong>Phone:</strong> ${phone_number || 'N/A'}<br>
+                <strong>Updated At:</strong> ${new Date().toLocaleString()}
+              </p>
+            </div>
+            <p style="color: #dc3545; font-size: 14px;">
+              ⚠️ If you did NOT make these changes, please contact IT support immediately!
+            </p>
+          </div>
+          <div style="background-color: #f8f9fa; padding: 15px; border-radius: 0 0 10px 10px; text-align: center;">
+            <p style="margin: 0; color: #666; font-size: 12px;">
+              Ethiopian Statistical Service IT Help Desk
+            </p>
+          </div>
+        </div>
+      `;
+      
+      const mailOptions = {
+        from: '"IT Help Desk" <hussenseid670@gmail.com>',
+        to: existingUser.email,
+        subject: '📝 Profile Updated - IT Help Desk',
+        html: profileUpdateHtml
+      };
+      
+      await transporter.sendMail(mailOptions);
+      console.log(`✅ Profile update email sent to: ${existingUser.email}`);
+      
+      // If email changed, also send to new email
+      if (email !== existingUser.email) {
+        const mailOptions2 = {
+          from: '"IT Help Desk" <hussenseid670@gmail.com>',
+          to: email,
+          subject: '📝 Email Address Updated - IT Help Desk',
+          html: profileUpdateHtml
+        };
+        await transporter.sendMail(mailOptions2);
+        console.log(`✅ Profile update email also sent to new email: ${email}`);
+      }
+    } catch (emailError) {
+      console.error('❌ Profile update email failed:', emailError.message);
+    }
+
+    // 🔥 NOTIFY ADMIN
+    try {
+      await notifyAdmin('📝 User Profile Updated', 
+        `${existingUser.name} updated their profile information.`, {
+        userName: name,
+        userEmail: email,
+        action: 'profile_update'
+      });
+    } catch (adminEmailError) {
+      console.error('❌ Admin notification failed:', adminEmailError.message);
     }
     
     const updatedUser = await db.collection('users').findOne(
@@ -1540,21 +3216,20 @@ app.put('/api/profile/:userId', authenticateToken, requireDatabase, upload.singl
     });
     
   } catch (error) {
-    console.error(`❌ Profile update error for userId: ${req.params.userId}:`, error);
+    console.error(`❌ Profile update error:`, error);
     res.status(500).json({ success: false, message: 'Server error: ' + error.message });
   }
 });
 
 // Change password endpoint (FIXED ROUTE - BOTH VERSIONS FOR COMPATIBILITY)
+// Change password endpoint - WITH EMAIL NOTIFICATION
 app.put('/api/change-password', authenticateToken, requireDatabase, async (req, res) => {
   try {
     const { user_id, current_password, new_password, confirm_password } = req.body;
     
     console.log(`🔐 Change password request for userId: ${user_id} by user ${req.user.id}`);
     
-    // Check permissions
     if (req.user.id !== parseInt(user_id)) {
-      console.log(`❌ Access denied: User ${req.user.id} cannot change password for user ${user_id}`);
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
     
@@ -1586,11 +3261,68 @@ app.put('/api/change-password', authenticateToken, requireDatabase, async (req, 
       { $set: { password: hashedPassword, updated_at: new Date() } }
     );
     
+    // 🔥 SEND PASSWORD CHANGE EMAIL
+    try {
+      const passwordChangeHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+          <div style="background: #ffc107; padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
+            <h1 style="color: #333; margin: 0;">🔐 Password Changed</h1>
+          </div>
+          <div style="padding: 20px;">
+            <h2 style="color: #333;">Hello ${user.name},</h2>
+            <p style="font-size: 16px; color: #555; line-height: 1.6;">
+              Your password has been successfully changed.
+            </p>
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <p style="margin: 0; color: #666; font-size: 14px;">
+                <strong>Email:</strong> ${user.email}<br>
+                <strong>Changed At:</strong> ${new Date().toLocaleString()}<br>
+                <strong>IP Address:</strong> ${req.ip || 'Unknown'}
+              </p>
+            </div>
+            <p style="color: #dc3545; font-size: 14px; font-weight: bold;">
+              ⚠️ If you did NOT make this change, please contact IT support immediately!
+            </p>
+          </div>
+          <div style="background-color: #f8f9fa; padding: 15px; border-radius: 0 0 10px 10px; text-align: center;">
+            <p style="margin: 0; color: #666; font-size: 12px;">
+              Ethiopian Statistical Service IT Help Desk<br>
+              This is an automated security notification.
+            </p>
+          </div>
+        </div>
+      `;
+      
+      const mailOptions = {
+        from: '"IT Help Desk Security" <hussenseid670@gmail.com>',
+        to: user.email,
+        subject: '🔐 Password Changed - IT Help Desk',
+        html: passwordChangeHtml
+      };
+      
+      await transporter.sendMail(mailOptions);
+      console.log(`✅ Password change email sent to: ${user.email}`);
+    } catch (emailError) {
+      console.error('❌ Password change email failed:', emailError.message);
+    }
+
+    // 🔥 NOTIFY ADMIN
+    try {
+      await notifyAdmin('🔐 User Password Changed', 
+        `${user.name} (${user.email}) has changed their password.`, {
+        userName: user.name,
+        userEmail: user.email,
+        action: 'password_change'
+      });
+    } catch (adminEmailError) {
+      console.error('❌ Admin notification failed:', adminEmailError.message);
+    }
+    
     console.log(`✅ Password changed successfully for userId: ${user_id}`);
     res.json({ success: true, message: 'Password changed successfully' });
     
   } catch (error) {
-    console.error(`❌ Change password error for userId: ${req.body.user_id}:`, error);
+    console.error(`❌ Change password error:`, error);
     res.status(500).json({ success: false, message: 'Server error: ' + error.message });
   }
 });
@@ -1646,15 +3378,249 @@ app.put('/api/change-password/:userId', authenticateToken, requireDatabase, asyn
   }
 });
 
+// ========== ENHANCED ATTACHMENT ROUTES ==========
+
+// Get attachment metadata and content for viewing
+app.get('/api/tickets/:ticketId/attachment-meta', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+    
+    console.log(`📎 Fetching attachment metadata for ticket ${ticketId}`);
+    
+    const ticket = await db.collection('tickets').findOne({ 
+      ticket_id: parseInt(ticketId) 
+    });
+    
+    if (!ticket) {
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
+    
+    if (!ticket.attachment) {
+      return res.status(404).json({ success: false, message: 'No attachment found for this ticket' });
+    }
+    
+    // Check permissions
+    if (req.user.role === 'user' && ticket.user_id !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+    
+    if (req.user.role === 'senior' && ticket.team_id !== req.user.team_id) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+    
+    const attachmentPath = ticket.attachment;
+    const fullPath = path.join(__dirname, attachmentPath);
+    
+    // Check if file exists
+    if (!fs.existsSync(fullPath)) {
+      console.log(`❌ Attachment file not found: ${fullPath}`);
+      return res.status(404).json({ success: false, message: 'Attachment file not found on server' });
+    }
+    
+    const stats = fs.statSync(fullPath);
+    const fileExtension = path.extname(attachmentPath).toLowerCase();
+    
+    let fileType = 'unknown';
+    let canPreview = false;
+    
+    if (['.jpg', '.jpeg', '.png', '.gif', '.bmp'].includes(fileExtension)) {
+      fileType = 'image';
+      canPreview = true;
+    } else if (fileExtension === '.pdf') {
+      fileType = 'pdf';
+      canPreview = true;
+    } else if (['.doc', '.docx', '.txt'].includes(fileExtension)) {
+      fileType = 'document';
+      canPreview = false; // Can't preview in browser directly
+    }
+    
+    const metadata = {
+      filename: path.basename(attachmentPath),
+      fileType: fileType,
+      fileSize: stats.size,
+      fileExtension: fileExtension,
+      uploadDate: ticket.created_at,
+      canPreview: canPreview,
+      mimeType: getMimeType(fileExtension)
+    };
+    
+    console.log(`✅ Attachment metadata found for ticket ${ticketId}:`, metadata);
+    
+    res.json({
+      success: true,
+      metadata: metadata
+    });
+    
+  } catch (error) {
+    console.error('❌ Attachment metadata error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch attachment metadata: ' + error.message 
+    });
+  }
+});
+
+// Get attachment data for viewing (returns base64 encoded file)
+app.get('/api/tickets/:ticketId/attachment-view', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+    
+    console.log(`👀 Viewing attachment for ticket ${ticketId}`);
+    
+    const ticket = await db.collection('tickets').findOne({ 
+      ticket_id: parseInt(ticketId) 
+    });
+    
+    if (!ticket) {
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
+    
+    if (!ticket.attachment) {
+      return res.status(404).json({ success: false, message: 'No attachment found for this ticket' });
+    }
+    
+    // Check permissions
+    if (req.user.role === 'user' && ticket.user_id !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+    
+    if (req.user.role === 'senior' && ticket.team_id !== req.user.team_id) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+    
+    const attachmentPath = ticket.attachment;
+    const fullPath = path.join(__dirname, attachmentPath);
+    
+    // Check if file exists
+    if (!fs.existsSync(fullPath)) {
+      console.log(`❌ Attachment file not found: ${fullPath}`);
+      return res.status(404).json({ success: false, message: 'Attachment file not found on server' });
+    }
+    
+    const fileExtension = path.extname(attachmentPath).toLowerCase();
+    const mimeType = getMimeType(fileExtension);
+    
+    // Read file as base64 for easy display in frontend
+    const fileBuffer = fs.readFileSync(fullPath);
+    const base64Data = fileBuffer.toString('base64');
+    const dataUrl = `data:${mimeType};base64,${base64Data}`;
+    
+    console.log(`✅ Attachment prepared for viewing: ${fullPath}`);
+    
+    res.json({
+      success: true,
+      data: dataUrl,
+      filename: path.basename(attachmentPath),
+      mimeType: mimeType,
+      fileExtension: fileExtension
+    });
+    
+  } catch (error) {
+    console.error('❌ Attachment view error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to load attachment: ' + error.message 
+    });
+  }
+});
+
+// Download attachment file (original functionality)
+app.get('/api/tickets/:ticketId/attachment', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+    
+    console.log(`📥 Downloading attachment for ticket ${ticketId}`);
+    
+    const ticket = await db.collection('tickets').findOne({ 
+      ticket_id: parseInt(ticketId) 
+    });
+    
+    if (!ticket) {
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
+    
+    if (!ticket.attachment) {
+      return res.status(404).json({ success: false, message: 'No attachment found for this ticket' });
+    }
+    
+    // Check permissions
+    if (req.user.role === 'user' && ticket.user_id !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+    
+    if (req.user.role === 'senior' && ticket.team_id !== req.user.team_id) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+    
+    const attachmentPath = ticket.attachment;
+    const fullPath = path.join(__dirname, attachmentPath);
+    
+    // Check if file exists
+    if (!fs.existsSync(fullPath)) {
+      console.log(`❌ Attachment file not found: ${fullPath}`);
+      return res.status(404).json({ success: false, message: 'Attachment file not found on server' });
+    }
+    
+    const filename = path.basename(attachmentPath);
+    const fileExtension = path.extname(attachmentPath).toLowerCase();
+    const mimeType = getMimeType(fileExtension);
+    
+    console.log(`✅ Serving attachment file: ${fullPath}`);
+    
+    // Set appropriate headers
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', mimeType);
+    
+    // Stream the file to the client
+    const fileStream = fs.createReadStream(fullPath);
+    fileStream.pipe(res);
+    
+    fileStream.on('error', (error) => {
+      console.error('❌ File stream error:', error);
+      res.status(500).json({ 
+        success: false, 
+        message: 'Error streaming file: ' + error.message 
+      });
+    });
+    
+  } catch (error) {
+    console.error('❌ Attachment download error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to download attachment: ' + error.message 
+    });
+  }
+});
+
+// Helper function to get MIME type
+function getMimeType(fileExtension) {
+  const mimeTypes = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.gif': 'image/gif',
+    '.bmp': 'image/bmp',
+    '.pdf': 'application/pdf',
+    '.doc': 'application/msword',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.txt': 'text/plain'
+  };
+  
+  return mimeTypes[fileExtension] || 'application/octet-stream';
+}
+
 // ========== FIXED DELETE TICKET ROUTE (No Transactions) ==========
 
-// Delete ticket - FIXED VERSION without transactions
+
+
+
+// Delete ticket - ENHANCED WITH EMAIL NOTIFICATIONS
 app.delete('/api/tickets/:ticketId', authenticateToken, requireDatabase, async (req, res) => {
   try {
     const { ticketId } = req.params;
     
     console.log(`🗑️ Delete ticket request: ${ticketId} by user ${req.user.id}`);
-    
+
     const ticket = await db.collection('tickets').findOne({ ticket_id: parseInt(ticketId) });
     if (!ticket) {
       return res.status(404).json({ success: false, message: 'Ticket not found' });
@@ -1681,6 +3647,10 @@ app.delete('/api/tickets/:ticketId', authenticateToken, requireDatabase, async (
       const logsResult = await db.collection('ticket_logs').deleteMany({ ticket_id: parseInt(ticketId) });
       console.log(`✅ Logs deleted for ticket ${ticketId}: ${logsResult.deletedCount} logs`);
       
+      // Delete notifications related to this ticket
+      const notificationsResult = await db.collection('notifications').deleteMany({ related_ticket_id: parseInt(ticketId) });
+      console.log(`✅ Notifications deleted for ticket ${ticketId}: ${notificationsResult.deletedCount} notifications`);
+      
       // Delete the ticket
       const result = await db.collection('tickets').deleteOne({ ticket_id: parseInt(ticketId) });
       
@@ -1689,6 +3659,28 @@ app.delete('/api/tickets/:ticketId', authenticateToken, requireDatabase, async (
       }
       
       console.log(`✅ Ticket ${ticketId} deleted successfully`);
+
+      // 🔔 SEND EMAIL NOTIFICATION FOR TICKET DELETION
+      await createComprehensiveNotification({
+        user_id: ticket.user_id,
+        title: 'Ticket Deleted',
+        message: `Your ticket #${ticketId} has been deleted by ${req.user.name}.`,
+        type: 'ticket_deleted',
+        related_ticket_id: parseInt(ticketId),
+        priority: 'high'
+      });
+
+      // Notify assigned officer if exists
+      if (ticket.assigned_to && ticket.assigned_to !== ticket.user_id) {
+        await createComprehensiveNotification({
+          user_id: ticket.assigned_to,
+          title: 'Assigned Ticket Deleted',
+          message: `Ticket #${ticketId} that was assigned to you has been deleted by ${req.user.name}.`,
+          type: 'ticket_deleted',
+          related_ticket_id: parseInt(ticketId),
+          priority: 'medium'
+        });
+      }
       
       res.json({
         success: true,
@@ -1708,9 +3700,17 @@ app.delete('/api/tickets/:ticketId', authenticateToken, requireDatabase, async (
   }
 });
 
+
+
+
+
+
+
+
 // ========== FIXED DELETE ACCOUNT ROUTE ==========
 
-// Delete user account endpoint - FIXED VERSION
+// Delete user account endpoint - WITH EMAIL NOTIFICATIONS
+// Delete user account endpoint - WITH EMAIL NOTIFICATIONS
 app.delete('/api/profile/:userId', authenticateToken, requireDatabase, async (req, res) => {
   try {
     const { userId } = req.params;
@@ -1718,9 +3718,7 @@ app.delete('/api/profile/:userId', authenticateToken, requireDatabase, async (re
     
     console.log(`🗑️ Delete account request for userId: ${userId} by user ${req.user.id}`);
     
-    // Check permissions - users can only delete their own account, admins can delete any
     if (req.user.id !== parseInt(userId) && req.user.role !== 'admin') {
-      console.log(`❌ Access denied: User ${req.user.id} cannot delete account of user ${userId}`);
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
     
@@ -1736,7 +3734,6 @@ app.delete('/api/profile/:userId', authenticateToken, requireDatabase, async (re
       return res.status(404).json({ success: false, message: 'User not found' });
     }
     
-    // Prevent admin from deleting themselves
     if (parseInt(userId) === req.user.id && req.user.role === 'admin') {
       return res.status(400).json({ 
         success: false, 
@@ -1746,23 +3743,22 @@ app.delete('/api/profile/:userId', authenticateToken, requireDatabase, async (re
     
     try {
       // Delete user's comments
-      const commentsResult = await db.collection('comments').deleteMany({ author_id: parseInt(userId) });
-      console.log(`✅ Comments deleted for user ${userId}: ${commentsResult.deletedCount} comments`);
+      await db.collection('comments').deleteMany({ author_id: parseInt(userId) });
       
       // Delete user's ticket logs
-      const logsResult = await db.collection('ticket_logs').deleteMany({ changed_by: parseInt(userId) });
-      console.log(`✅ Logs deleted for user ${userId}: ${logsResult.deletedCount} logs`);
+      await db.collection('ticket_logs').deleteMany({ changed_by: parseInt(userId) });
+      
+      // Delete user's notifications
+      await db.collection('notifications').deleteMany({ user_id: parseInt(userId) });
       
       // Unassign tickets assigned to this user
-      const unassignResult = await db.collection('tickets').updateMany(
+      await db.collection('tickets').updateMany(
         { assigned_to: parseInt(userId) }, 
         { $set: { assigned_to: null } }
       );
-      console.log(`✅ Tickets unassigned from user ${userId}: ${unassignResult.modifiedCount} tickets`);
       
       // Delete tickets created by this user
-      const ticketsResult = await db.collection('tickets').deleteMany({ user_id: parseInt(userId) });
-      console.log(`✅ Tickets deleted for user ${userId}: ${ticketsResult.deletedCount} tickets`);
+      await db.collection('tickets').deleteMany({ user_id: parseInt(userId) });
       
       // Delete the user
       const result = await db.collection('users').deleteOne({ user_id: parseInt(userId) });
@@ -1771,20 +3767,64 @@ app.delete('/api/profile/:userId', authenticateToken, requireDatabase, async (re
         return res.status(404).json({ success: false, message: 'User not found' });
       }
       
-      // Delete user's avatar if exists and not default
+      // Delete user's avatar if exists
       if (user.avatar_path && user.avatar_path !== 'assets/default_avatar.png') {
         const avatarPath = path.join(__dirname, user.avatar_path);
         if (fs.existsSync(avatarPath)) {
           fs.unlinkSync(avatarPath);
-          console.log(`🗑️ User avatar deleted: ${user.avatar_path}`);
         }
       }
       
       console.log(`✅ Account deleted successfully for userId: ${userId}`);
-      
-      // If user is deleting their own account, log them out
-      if (parseInt(userId) === req.user.id) {
-        console.log(`🚪 User ${userId} deleted their own account, logging out`);
+
+      // 🔥 SEND ACCOUNT DELETION EMAIL TO USER
+      try {
+        const deletionHtml = `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+            <div style="background: #dc3545; padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
+              <h1 style="color: white; margin: 0;">Account Deleted</h1>
+            </div>
+            <div style="padding: 20px;">
+              <h2 style="color: #333;">Goodbye ${user.name},</h2>
+              <p style="font-size: 16px; color: #555; line-height: 1.6;">
+                Your account has been successfully deleted from the IT Help Desk System.
+              </p>
+              <p style="color: #888; font-size: 14px;">
+                If you did not request this deletion, please contact the administrator immediately.
+              </p>
+            </div>
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 0 0 10px 10px; text-align: center;">
+              <p style="margin: 0; color: #666; font-size: 12px;">
+                Ethiopian Statistical Service IT Help Desk
+              </p>
+            </div>
+          </div>
+        `;
+        
+        const mailOptions = {
+          from: '"IT Help Desk" <hussenseid670@gmail.com>',
+          to: user.email,
+          subject: 'Account Deleted - IT Help Desk',
+          html: deletionHtml
+        };
+        
+        await transporter.sendMail(mailOptions);
+        console.log(`✅ Account deletion email sent to: ${user.email}`);
+      } catch (emailError) {
+        console.error('❌ Deletion email failed:', emailError.message);
+      }
+
+      // 🔥 NOTIFY ADMIN ABOUT ACCOUNT DELETION
+      try {
+        await notifyAdmin('User Account Deleted', 
+          `A user account has been deleted from the IT Help Desk System.`, {
+          userName: user.name,
+          userEmail: user.email,
+          action: 'account_deletion'
+        });
+        console.log(`✅ Admin notified about account deletion: ${user.name}`);
+      } catch (adminEmailError) {
+        console.error('❌ Admin notification failed:', adminEmailError.message);
       }
       
       res.json({ 
@@ -1804,6 +3844,8 @@ app.delete('/api/profile/:userId', authenticateToken, requireDatabase, async (re
     });
   }
 });
+
+
 
 // ========== FIXED DELETE USER'S TICKETS ROUTE ==========
 
@@ -1839,9 +3881,10 @@ app.delete('/api/tickets/user/:userId', authenticateToken, requireDatabase, asyn
       
       console.log(`✅ ${ticketsResult.deletedCount} tickets deleted for userId: ${userId}`);
       
-      // Also delete associated comments and logs
+      // Also delete associated comments, logs, and notifications
       await db.collection('comments').deleteMany({ author_id: parseInt(userId) });
       await db.collection('ticket_logs').deleteMany({ changed_by: parseInt(userId) });
+      await db.collection('notifications').deleteMany({ user_id: parseInt(userId) });
       
       res.json({ 
         success: true, 
@@ -1873,6 +3916,7 @@ app.get('/api/admin/system-stats', authenticateToken, requireAdmin, requireDatab
     const totalUsers = await db.collection('users').countDocuments();
     const totalTickets = await db.collection('tickets').countDocuments();
     const totalSeniorOfficers = await db.collection('users').countDocuments({ role: 'senior' });
+    const totalNotifications = await db.collection('notifications').countDocuments();
     
     // Calculate average response time (simplified)
     const ticketsWithResponse = await db.collection('tickets').aggregate([
@@ -1907,6 +3951,7 @@ app.get('/api/admin/system-stats', authenticateToken, requireAdmin, requireDatab
         totalUsers,
         totalTickets,
         totalSeniorOfficers,
+        totalNotifications,
         avgResponseTime,
         slaCompliance,
         userSatisfaction,
@@ -1939,6 +3984,13 @@ app.get('/api/admin/recent-activity', authenticateToken, requireAdmin, requireDa
       .limit(5)
       .toArray();
     
+    // Get recent notifications
+    const recentNotifications = await db.collection('notifications')
+      .find()
+      .sort({ created_at: -1 })
+      .limit(5)
+      .toArray();
+    
     const activity = [
       ...recentLogs.map(log => ({
         type: 'update',
@@ -1949,6 +4001,11 @@ app.get('/api/admin/recent-activity', authenticateToken, requireAdmin, requireDa
         type: 'login',
         description: `${user.name} logged in`,
         timestamp: user.last_login
+      })),
+      ...recentNotifications.map(notification => ({
+        type: 'notification',
+        description: `Notification: ${notification.title}`,
+        timestamp: notification.created_at
       }))
     ].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(0, 10);
     
@@ -1996,13 +4053,15 @@ app.put('/api/admin/users/:userId', authenticateToken, requireAdmin, requireData
     }
 
     const updateFields = {
-      name,
-      email,
-      phone_number: phone_number || null,
-      role,
-      team_id: team_id ? parseInt(team_id) : null,
-      updated_at: new Date()
-    };
+  name,
+  email,
+  phone_number: phone_number || null,
+  role,
+  department: req.body.department || '',   // ADD THIS LINE
+  position: req.body.position || '',       // ADD THIS LINE
+  team_id: team_id ? parseInt(team_id) : null,
+  updated_at: new Date()
+};
 
     // Check if email is already taken by another user
     if (email && email !== user.email) {
@@ -2052,79 +4111,346 @@ app.put('/api/admin/users/:userId', authenticateToken, requireAdmin, requireData
   }
 });
 
-// Delete user by ID (for admin) - FIXED VERSION without transactions
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// // Delete user by ID (for admin) - FIXED VERSION without transactions
+// // Delete user by ID (for admin) - WITH EMAIL TO BOTH USER AND ADMIN
+// app.delete('/api/admin/users/:userId', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
+//   try {
+//     const { userId } = req.params;
+    
+//     console.log(`🗑️ [DELETE] Delete user ${userId} by admin ${req.user.id}`);
+
+//     // Check if user exists
+//     const user = await db.collection('users').findOne({ user_id: parseInt(userId) });
+//     if (!user) {
+//       console.log(`❌ User ${userId} not found`);
+//       return res.status(404).json({ success: false, message: 'User not found' });
+//     }
+
+//     // Prevent admin from deleting themselves
+//     if (parseInt(userId) === req.user.id) {
+//       return res.status(400).json({ success: false, message: 'Cannot delete your own account' });
+//     }
+
+//     // Store user info before deletion for email
+//     const deletedUserName = user.name;
+//     const deletedUserEmail = user.email;
+//     const deletedUserRole = user.role;
+//     const adminName = req.user.name;
+//     const adminEmail = req.user.email;
+
+//     try {
+//       // Delete user's comments
+//       await db.collection('comments').deleteMany({ author_id: parseInt(userId) });
+//       console.log(`✅ Comments deleted for user ${userId}`);
+      
+//       // Delete user's ticket logs
+//       await db.collection('ticket_logs').deleteMany({ changed_by: parseInt(userId) });
+//       console.log(`✅ Logs deleted for user ${userId}`);
+      
+//       // Delete user's notifications
+//       await db.collection('notifications').deleteMany({ user_id: parseInt(userId) });
+//       console.log(`✅ Notifications deleted for user ${userId}`);
+      
+//       // Unassign tickets assigned to this user
+//       await db.collection('tickets').updateMany(
+//         { assigned_to: parseInt(userId) }, 
+//         { $set: { assigned_to: null } }
+//       );
+//       console.log(`✅ Tickets unassigned from user ${userId}`);
+      
+//       // Delete tickets created by this user
+//       await db.collection('tickets').deleteMany({ user_id: parseInt(userId) });
+//       console.log(`✅ Tickets deleted for user ${userId}`);
+      
+//       // Delete the user
+//       const result = await db.collection('users').deleteOne({ user_id: parseInt(userId) });
+      
+//       if (result.deletedCount === 0) {
+//         throw new Error('User not found');
+//       }
+      
+//       // Delete avatar file if exists
+//       if (user.avatar_path && user.avatar_path !== 'assets/default_avatar.png') {
+//         const avatarFullPath = path.join(__dirname, user.avatar_path);
+//         if (fs.existsSync(avatarFullPath)) {
+//           fs.unlinkSync(avatarFullPath);
+//           console.log(`✅ Avatar file deleted: ${user.avatar_path}`);
+//         }
+//       }
+      
+//       console.log(`✅ User ${userId} deleted successfully`);
+
+//       // 🔥 SEND EMAIL TO THE DELETED USER
+//       try {
+//         const deletionHtml = `
+//           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+//             <div style="background: #dc3545; padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
+//               <h1 style="color: white; margin: 0;">🗑️ Account Deleted</h1>
+//             </div>
+//             <div style="padding: 20px;">
+//               <h2 style="color: #333;">Hello ${deletedUserName},</h2>
+//               <p style="font-size: 16px; color: #555; line-height: 1.6;">
+//                 Your account has been deleted from the IT Help Desk System by an administrator.
+//               </p>
+//               <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+//                 <p style="margin: 0; color: #666; font-size: 14px;">
+//                   <strong>Deleted Account:</strong><br>
+//                   <strong>Name:</strong> ${deletedUserName}<br>
+//                   <strong>Email:</strong> ${deletedUserEmail}<br>
+//                   <strong>Role:</strong> ${deletedUserRole}<br>
+//                   <strong>Deleted By:</strong> ${adminName} (Admin)<br>
+//                   <strong>Deleted At:</strong> ${new Date().toLocaleString()}
+//                 </p>
+//               </div>
+//               <p style="color: #dc3545; font-size: 14px;">
+//                 ⚠️ If you believe this was a mistake, please contact the IT Help Desk immediately.
+//               </p>
+//               <p style="color: #888; font-size: 14px;">
+//                 All your tickets, comments, and data have been removed from the system.
+//               </p>
+//             </div>
+//             <div style="background-color: #f8f9fa; padding: 15px; border-radius: 0 0 10px 10px; text-align: center;">
+//               <p style="margin: 0; color: #666; font-size: 12px;">
+//                 Ethiopian Statistical Service IT Help Desk
+//               </p>
+//             </div>
+//           </div>
+//         `;
+        
+//         const mailOptions = {
+//           from: '"IT Help Desk" <hussenseid670@gmail.com>',
+//           to: deletedUserEmail,
+//           subject: '🗑️ Account Deleted - IT Help Desk',
+//           html: deletionHtml
+//         };
+        
+//         await transporter.sendMail(mailOptions);
+//         console.log(`✅ Account deletion email sent to deleted user: ${deletedUserEmail}`);
+//       } catch (emailError) {
+//         console.error('❌ Deletion email to user failed:', emailError.message);
+//       }
+
+//       // 🔥 SEND EMAIL TO THE ADMIN WHO DELETED THE USER
+//       try {
+//         const adminNotificationHtml = `
+//           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+//             <div style="background: #dc3545; padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
+//               <h1 style="color: white; margin: 0;">🗑️ User Account Deleted</h1>
+//             </div>
+//             <div style="padding: 20px;">
+//               <h2 style="color: #333;">Hello ${adminName},</h2>
+//               <p style="font-size: 16px; color: #555; line-height: 1.6;">
+//                 You have successfully deleted a user account from the IT Help Desk System.
+//               </p>
+//               <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+//                 <p style="margin: 0; color: #666; font-size: 14px;">
+//                   <strong>Deleted User Details:</strong><br>
+//                   <strong>Name:</strong> ${deletedUserName}<br>
+//                   <strong>Email:</strong> ${deletedUserEmail}<br>
+//                   <strong>Role:</strong> ${deletedUserRole}<br>
+//                   <strong>User ID:</strong> ${userId}<br>
+//                   <strong>Deleted By:</strong> ${adminName} (You)<br>
+//                   <strong>Deleted At:</strong> ${new Date().toLocaleString()}
+//                 </p>
+//               </div>
+//               <p style="color: #888; font-size: 14px;">
+//                 All associated data (tickets, comments, logs) has been removed from the system.
+//               </p>
+//             </div>
+//             <div style="background-color: #f8f9fa; padding: 15px; border-radius: 0 0 10px 10px; text-align: center;">
+//               <p style="margin: 0; color: #666; font-size: 12px;">
+//                 Ethiopian Statistical Service IT Help Desk - Admin Confirmation
+//               </p>
+//             </div>
+//           </div>
+//         `;
+        
+//         const adminMailOptions = {
+//           from: '"IT Help Desk" <hussenseid670@gmail.com>',
+//           to: adminEmail || 'seidhussen0729@gmail.com',
+//           subject: `🗑️ User Deleted: ${deletedUserName} (${deletedUserEmail})`,
+//           html: adminNotificationHtml
+//         };
+        
+//         await transporter.sendMail(adminMailOptions);
+//         console.log(`✅ Deletion confirmation email sent to admin: ${adminEmail}`);
+//       } catch (emailError) {
+//         console.error('❌ Admin deletion email failed:', emailError.message);
+//       }
+
+//       // 🔥 ALSO NOTIFY SUPER ADMIN (seidhussen0729@gmail.com)
+//       try {
+//         await notifyAdmin('🗑️ User Account Deleted by Admin', 
+//           `Admin ${adminName} deleted user account: ${deletedUserName} (${deletedUserEmail}).`, {
+//           userName: deletedUserName,
+//           userEmail: deletedUserEmail,
+//           action: 'admin_deleted_user'
+//         });
+//         console.log('✅ Super admin notified about user deletion');
+//       } catch (superAdminEmailError) {
+//         console.error('❌ Super admin notification failed:', superAdminEmailError.message);
+//       }
+      
+//       res.json({
+//         success: true,
+//         message: 'User deleted successfully',
+//       });
+//     } catch (error) {
+//       console.error('❌ Error during user deletion:', error);
+//       throw error;
+//     }
+//   } catch (error) {
+//     console.error('❌ Delete user error:', error);
+//     res.status(500).json({ 
+//       success: false, 
+//       message: 'Server error during user deletion: ' + error.message 
+//     });
+//   }
+// });
+
+
+
+// Delete user by ID (for admin) - WITH BACKUP AND EMAIL
+// Delete user by ID (for admin) - FAST VERSION WITH BACKUP
+// Delete user by ID (for admin) - SUPER FAST VERSION
 app.delete('/api/admin/users/:userId', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
   try {
     const { userId } = req.params;
     
-    console.log(`🗑️ [DELETE] Delete user ${userId} by admin ${req.user.id}`);
+    console.log(`🗑️ FAST DELETE: User ${userId} by admin ${req.user.name}`);
 
-    // Check if user exists
     const user = await db.collection('users').findOne({ user_id: parseInt(userId) });
     if (!user) {
-      console.log(`❌ User ${userId} not found`);
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    // Prevent admin from deleting themselves
     if (parseInt(userId) === req.user.id) {
       return res.status(400).json({ success: false, message: 'Cannot delete your own account' });
     }
 
-    try {
-      // Delete user's comments
-      await db.collection('comments').deleteMany({ author_id: parseInt(userId) });
-      console.log(`✅ Comments deleted for user ${userId}`);
-      
-      // Delete user's ticket logs
-      await db.collection('ticket_logs').deleteMany({ changed_by: parseInt(userId) });
-      console.log(`✅ Logs deleted for user ${userId}`);
-      
-      // Unassign tickets assigned to this user
-      await db.collection('tickets').updateMany(
-        { assigned_to: parseInt(userId) }, 
-        { $set: { assigned_to: null } }
-      );
-      console.log(`✅ Tickets unassigned from user ${userId}`);
-      
-      // Delete tickets created by this user
-      await db.collection('tickets').deleteMany({ user_id: parseInt(userId) });
-      console.log(`✅ Tickets deleted for user ${userId}`);
-      
-      // Delete the user
-      const result = await db.collection('users').deleteOne({ user_id: parseInt(userId) });
-      
-      if (result.deletedCount === 0) {
-        throw new Error('User not found');
-      }
-      
-      // Delete avatar file if exists
-      if (user.avatar_path && user.avatar_path !== 'assets/default_avatar.png') {
-        const avatarFullPath = path.join(__dirname, user.avatar_path);
-        if (fs.existsSync(avatarFullPath)) {
-          fs.unlinkSync(avatarFullPath);
-          console.log(`✅ Avatar file deleted: ${user.avatar_path}`);
-        }
-      }
-      
-      console.log(`✅ User ${userId} deleted successfully`);
-      
-      res.json({
-        success: true,
-        message: 'User deleted successfully',
-      });
-    } catch (error) {
-      console.error('❌ Error during user deletion:', error);
-      throw error;
+    // 💾 Quick backup (non-blocking - do in background)
+    backupUserDataFast(userId, req.user.id, req.user.name).catch(e => console.error('Backup error:', e));
+
+    // 🗑️ DELETE ALL IN PARALLEL - SUPER FAST
+    await Promise.all([
+      db.collection('comments').deleteMany({ author_id: parseInt(userId) }),
+      db.collection('ticket_logs').deleteMany({ changed_by: parseInt(userId) }),
+      db.collection('notifications').deleteMany({ user_id: parseInt(userId) }),
+      db.collection('tickets').updateMany({ assigned_to: parseInt(userId) }, { $set: { assigned_to: null } }),
+      db.collection('tickets').deleteMany({ user_id: parseInt(userId) }),
+      db.collection('procurement_requests').deleteMany({ requested_by: parseInt(userId).toString() }),
+    ]);
+    
+    const result = await db.collection('users').deleteOne({ user_id: parseInt(userId) });
+    
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, message: 'User not found during deletion' });
     }
+    
+    // Delete avatar if exists (non-blocking)
+    if (user.avatar_path && user.avatar_path !== 'assets/default_avatar.png') {
+      const avatarFullPath = path.join(__dirname, user.avatar_path);
+      if (fs.existsSync(avatarFullPath)) fs.unlinkSync(avatarFullPath);
+    }
+    
+    console.log(`✅ User ${userId} deleted in milliseconds`);
+
+    res.json({
+      success: true,
+      message: 'User deleted successfully'
+    });
+
   } catch (error) {
     console.error('❌ Delete user error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error during user deletion: ' + error.message 
-    });
+    res.status(500).json({ success: false, message: 'Server error: ' + error.message });
   }
 });
+
+// Quick backup function
+async function backupUserDataFast(userId, deletedBy, deletedByName) {
+  try {
+    const user = await db.collection('users').findOne({ user_id: parseInt(userId) });
+    if (!user) return;
+    
+    const backupDoc = {
+      user_id: parseInt(userId),
+      user_data: { ...user },
+      deleted_by: deletedBy,
+      deleted_by_name: deletedByName || 'Admin',
+      deleted_at: new Date(),
+      restored: false
+    };
+    
+    const collections = await db.listCollections().toArray();
+    const collectionNames = collections.map(col => col.name);
+    if (!collectionNames.includes('user_backups')) {
+      await db.createCollection('user_backups');
+    }
+    
+    await db.collection('user_backups').insertOne(backupDoc);
+    console.log(`💾 Backup saved for user ${userId}`);
+  } catch (error) {
+    console.error('Quick backup error:', error);
+  }
+}
+
+// Background email function
+async function sendDeleteEmails(deletedUser, adminUser, backupId) {
+  try {
+    const mailOptions = {
+      from: '"IT Help Desk" <hussenseid670@gmail.com>',
+      to: deletedUser.email,
+      subject: 'Account Deleted - IT Help Desk',
+      html: `<h2>Account Deleted</h2><p>Hello ${deletedUser.name}, your account has been deleted. Backup ID: ${backupId}</p>`
+    };
+    await transporter.sendMail(mailOptions);
+  } catch (e) { /* ignore */ }
+}
+
+
+
+
+
+
+
+
+
+
+
+
 
 // Get all users for admin with filtering
 app.get('/api/admin/users', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
@@ -2390,130 +4716,6 @@ app.get('/api/teams/available', authenticateToken, requireDatabase, async (req, 
   }
 });
 
-// Submit ticket endpoint
-app.post('/api/submit-ticket', authenticateToken, requireDatabase, ticketUpload.single('attachment'), async (req, res) => {
-  try {
-    const { description, priority } = req.body;
-    const userId = req.user.id;
-    const attachment = req.file ? 'assets/ticket_uploads/' + req.file.filename : null;
-
-    if (!description || !priority) {
-      return res.status(400).json({ success: false, message: 'Description and priority are required' });
-    }
-
-    console.log(`🎫 NEW TICKET from user ${userId}`);
-
-    // AI classification
-    const aiCategory = await classifyTicketWithAI(description);
-    const issueType = aiCategory.issue_type;
-    const confidence = aiCategory.confidence;
-
-    console.log(`🤖 AI Classification: ${issueType} (${(confidence * 100).toFixed(1)}% confidence)`);
-
-    // Get team ID for the issue type
-    const teamId = enhancedTeamMap[issueType] || 9;
-
-    // Check if any officer in this team is available
-    const availableOfficer = await checkOfficerAvailability(teamId);
-    
-    let assignedTo = null;
-    let status = 'Queued';
-    let queuePosition = null;
-    let estimatedWaitTime = null;
-    let assignmentMessage = '';
-
-    if (availableOfficer) {
-      // Direct assignment to available officer
-      assignedTo = availableOfficer.user_id;
-      status = 'In Progress';
-      assignmentMessage = `Ticket submitted and assigned to ${availableOfficer.name}! 🎯`;
-      console.log(`✅ Direct assignment to ${availableOfficer.name} (${availableOfficer.active_tickets}/3 tickets)`);
-    } else {
-      // Place in queue
-      status = 'Queued';
-      
-      // Calculate queue position and wait time
-      const queueCount = await db.collection('tickets').countDocuments({ 
-        status: 'Queued', 
-        issue_type: issueType 
-      });
-      
-      queuePosition = queueCount + 1;
-      estimatedWaitTime = calculateWaitTime(issueType, queuePosition);
-      assignmentMessage = `Ticket submitted and placed in queue. Position: ${queuePosition}. Estimated wait: ${estimatedWaitTime} business days. ⏳`;
-      console.log(`⏳ Ticket queued for ${issueType} team at position ${queuePosition} - NO officers available`);
-    }
-
-    // Insert ticket
-    const ticketId = await getNextSequence('ticketId');
-    const ticketDoc = {
-      _id: ticketId,
-      ticket_id: ticketId,
-      user_id: userId,
-      description,
-      priority,
-      issue_type: issueType,
-      status,
-      team_id: teamId,
-      assigned_to: assignedTo,
-      attachment,
-      ai_confidence: confidence,
-      queue_position: queuePosition,
-      estimated_wait_days: estimatedWaitTime,
-      in_queue: status === 'Queued',
-      assigned_at: assignedTo ? new Date() : null,
-      created_at: new Date(),
-      updated_at: new Date()
-    };
-
-    await db.collection('tickets').insertOne(ticketDoc);
-
-    // Log ticket creation
-    await db.collection('ticket_logs').insertOne({
-      log_id: await getNextSequence('logId'),
-      ticket_id: ticketId,
-      changed_by: userId,
-      change_description: `Ticket created: ${issueType} - Status: ${status}`,
-      created_at: new Date()
-    });
-
-    console.log(`✅ Ticket ${ticketId} created with status: ${status}`);
-
-    // If ticket was queued, try immediate assignment
-    if (status === 'Queued') {
-      setTimeout(async () => {
-        try {
-          const assigned = await processTicketAssignment(ticketId);
-          if (assigned) {
-            console.log(`🚀 Immediately assigned ticket ${ticketId} after submission`);
-          }
-        } catch (error) {
-          console.error('Immediate assignment error:', error);
-        }
-      }, 1000);
-    }
-
-    res.json({
-      success: true,
-      ticket_id: ticketId,
-      issue_type: issueType,
-      confidence: confidence,
-      assigned: assignedTo !== null,
-      queue_position: queuePosition,
-      estimated_wait_days: estimatedWaitTime,
-      status: status,
-      message: assignmentMessage
-    });
-
-  } catch (error) {
-    console.error('Submit ticket error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Failed to submit ticket: ' + error.message 
-    });
-  }
-});
-
 // Get tickets with proper team filtering
 app.get('/api/tickets', authenticateToken, requireDatabase, async (req, res) => {
   try {
@@ -2671,19 +4873,27 @@ app.get('/api/tickets/:ticketId', authenticateToken, requireDatabase, async (req
   }
 });
 
-// Update ticket
+
+
+
+
+
+
+// FIXED: Update ticket with comprehensive notifications
+// FIXED: Update ticket with proper team reassignment
 app.put('/api/tickets/:ticketId', authenticateToken, requireDatabase, async (req, res) => {
   try {
     const { ticketId } = req.params;
-    const { issue_type, description, priority, status, new_team_id, comment_text } = req.body;
+    const { issue_type, description, priority, status, new_team_id, assigned_to, comment_text } = req.body;
 
     console.log(`🔄 [PUT] Update ticket ${ticketId} by user ${req.user.id}:`, {
-      issue_type,
-      description,
-      priority,
-      status,
+      issue_type, 
+      description: description ? description.substring(0, 50) + '...' : undefined, 
+      priority, 
+      status, 
       new_team_id,
-      comment_text: comment_text ? 'Comment provided' : 'No comment',
+      assigned_to,
+      comment_text: comment_text ? comment_text.substring(0, 50) + '...' : undefined
     });
 
     // Check if ticket exists and user has permission
@@ -2693,113 +4903,155 @@ app.put('/api/tickets/:ticketId', authenticateToken, requireDatabase, async (req
       return res.status(404).json({ success: false, message: 'Ticket not found' });
     }
 
+    console.log(`📋 Current ticket state: Team ${ticket.team_id}, Assigned to: ${ticket.assigned_to}, Status: ${ticket.status}`);
+
     // Permission check
     if (req.user.role === 'user' && ticket.user_id !== req.user.id) {
       console.log(`❌ User ${req.user.id} cannot update ticket ${ticketId}`);
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
-    if (req.user.role === 'senior' && ticket.team_id !== req.user.team_id) {
+    if (req.user.role === 'senior' && ticket.team_id !== req.user.team_id && req.user.role !== 'admin') {
       console.log(`❌ Senior officer from team ${req.user.team_id} cannot update ticket from team ${ticket.team_id}`);
       return res.status(403).json({ success: false, message: 'Access denied' });
-    }
-
-    // Validate ticket is editable
-    if (ticket.status !== 'Open' && ticket.status !== 'In Progress') {
-      console.log(`❌ Ticket ${ticketId} is ${ticket.status}, cannot be edited`);
-      return res.status(400).json({ success: false, message: 'Ticket cannot be edited as it is not Open or In Progress' });
     }
 
     const updateFields = {};
     let changeDescription = '';
     let hasChanges = false;
 
-    // Handle issue_type update
-    if (issue_type && issue_type !== ticket.issue_type) {
-      const validIssueTypes = ['Hardware', 'Software', 'Network', 'Account', 'Database', 'Configuration', 'Maintenance', 'Other'];
-      if (!validIssueTypes.includes(issue_type)) {
-        return res.status(400).json({ success: false, message: 'Invalid issue type' });
+    // Handle team reassignment (CRITICAL FIX)
+    if (new_team_id !== undefined && (req.user.role === 'admin' || req.user.role === 'senior')) {
+      const currentTeamId = ticket.team_id ? ticket.team_id.toString() : '';
+      const newTeamIdStr = new_team_id ? new_team_id.toString() : '';
+      
+      console.log(`🏢 Team reassignment: Current=${currentTeamId}, New=${newTeamIdStr}`);
+      
+      if (newTeamIdStr !== currentTeamId) {
+        let newTeamId = null;
+        let newTeamName = 'Unassigned';
+        
+        if (new_team_id) {
+          const newTeamIdInt = parseInt(new_team_id);
+          const team = await db.collection('teams').findOne({ team_id: newTeamIdInt });
+          if (!team) {
+            console.log(`❌ Invalid team: ${new_team_id}`);
+            return res.status(400).json({ success: false, message: 'Invalid team selected' });
+          }
+          newTeamId = newTeamIdInt;
+          newTeamName = team.team_name;
+          console.log(`✅ Valid team found: ${newTeamName} (ID: ${newTeamId})`);
+        }
+        
+        updateFields.team_id = newTeamId;
+        
+        // IMPORTANT: Clear assignment when changing teams
+        updateFields.assigned_to = null;
+        
+        // Set status to Queued for the new team
+        updateFields.status = 'Queued';
+        updateFields.in_queue = true;
+        updateFields.queue_position = null; // Will be recalculated
+        updateFields.assigned_at = null;
+        
+        changeDescription = `Reassigned to ${newTeamName}`;
+        hasChanges = true;
+        
+        console.log(`✅ Team reassignment: Ticket ${ticketId} moved to ${newTeamName}`);
       }
-      updateFields.issue_type = issue_type;
-      changeDescription += `Issue type changed from "${ticket.issue_type}" to "${issue_type}"`;
-      hasChanges = true;
-      console.log(`📝 Issue type change: ${ticket.issue_type} → ${issue_type}`);
     }
 
-    // Handle description update
-    if (description && description !== ticket.description) {
-      if (!description.trim()) {
-        return res.status(400).json({ success: false, message: 'Description cannot be empty' });
+    // Handle assignment (only if team is not changing or after team change)
+    if (assigned_to !== undefined && !updateFields.hasOwnProperty('assigned_to')) {
+      const currentAssignedTo = ticket.assigned_to ? ticket.assigned_to.toString() : '';
+      const newAssignedToStr = assigned_to ? assigned_to.toString() : '';
+      
+      if (newAssignedToStr !== currentAssignedTo) {
+        if (assigned_to) {
+          const newAssignedToInt = parseInt(assigned_to);
+          const officer = await db.collection('users').findOne({ 
+            user_id: newAssignedToInt, 
+            role: 'senior',
+            team_id: ticket.team_id // Must be in same team
+          });
+          
+          if (!officer) {
+            console.log(`❌ Invalid officer: ${assigned_to} for team ${ticket.team_id}`);
+            return res.status(400).json({ 
+              success: false, 
+              message: 'Invalid senior officer or officer not in this team' 
+            });
+          }
+          
+          updateFields.assigned_to = newAssignedToInt;
+          updateFields.status = 'In Progress';
+          updateFields.in_queue = false;
+          updateFields.assigned_at = new Date();
+          
+          if (changeDescription) {
+            changeDescription += ` and assigned to ${officer.name}`;
+          } else {
+            changeDescription = `Assigned to ${officer.name}`;
+          }
+          
+          console.log(`✅ Assigned to officer: ${officer.name}`);
+        } else {
+          updateFields.assigned_to = null;
+          updateFields.status = 'Queued';
+          updateFields.in_queue = true;
+          
+          if (changeDescription) {
+            changeDescription += ' and unassigned';
+          } else {
+            changeDescription = 'Unassigned';
+          }
+        }
+        hasChanges = true;
       }
-      updateFields.description = description;
+    }
+
+    // Handle status update
+    if (status && status !== ticket.status && (req.user.role === 'admin' || req.user.role === 'senior')) {
+      updateFields.status = status;
+      
       if (changeDescription) {
-        changeDescription += ` and description updated`;
+        changeDescription += ` and status changed to ${status}`;
       } else {
-        changeDescription = `Description updated`;
+        changeDescription = `Status changed to ${status}`;
       }
       hasChanges = true;
-      console.log(`📝 Description updated`);
+      
+      // Clear queue-related fields if no longer queued
+      if (status !== 'Queued') {
+        updateFields.in_queue = false;
+        updateFields.queue_position = null;
+        updateFields.estimated_wait_days = null;
+      }
     }
 
-    // Handle priority update
+    // Handle other updates (priority, issue_type, description)
     if (priority && priority !== ticket.priority) {
-      const validPriorities = ['Low', 'Medium', 'High'];
-      if (!validPriorities.includes(priority)) {
-        return res.status(400).json({ success: false, message: 'Invalid priority' });
-      }
       updateFields.priority = priority;
-      if (changeDescription) {
-        changeDescription += ` and priority changed from "${ticket.priority}" to "${priority}"`;
-      } else {
-        changeDescription = `Priority changed from "${ticket.priority}" to "${priority}"`;
-      }
       hasChanges = true;
       console.log(`📊 Priority change: ${ticket.priority} → ${priority}`);
     }
 
-    // Handle status update (for admins/seniors)
-    if (status && status !== ticket.status && (req.user.role === 'admin' || req.user.role === 'senior')) {
-      updateFields.status = status;
-      if (changeDescription) {
-        changeDescription += ` and status changed from "${ticket.status}" to "${status}"`;
-      } else {
-        changeDescription = `Status changed from "${ticket.status}" to "${status}"`;
-      }
+    if (issue_type && issue_type !== ticket.issue_type) {
+      updateFields.issue_type = issue_type;
       hasChanges = true;
-      console.log(`📊 Status change: ${ticket.status} → ${status}`);
+      console.log(`📝 Issue type change: ${ticket.issue_type} → ${issue_type}`);
     }
 
-    // Handle team reassignment (for admins/seniors)
-    if (new_team_id !== undefined && (req.user.role === 'admin' || req.user.role === 'senior')) {
-      const currentTeamId = ticket.team_id || '';
-      if (new_team_id !== currentTeamId) {
-        if (new_team_id === '') {
-          updateFields.team_id = null;
-          if (changeDescription) {
-            changeDescription += ' and team unassigned';
-          } else {
-            changeDescription = 'Team unassigned';
-          }
-        } else {
-          const team = await db.collection('teams').findOne({ team_id: parseInt(new_team_id) });
-          if (!team) {
-            return res.status(400).json({ success: false, message: 'Invalid team selected' });
-          }
-          updateFields.team_id = parseInt(new_team_id);
-          const newTeamName = team.team_name;
-          if (changeDescription) {
-            changeDescription += ` and reassigned to ${newTeamName}`;
-          } else {
-            changeDescription = `Reassigned to ${newTeamName}`;
-          }
-        }
-        hasChanges = true;
-        console.log(`🏢 Team change: ${currentTeamId} → ${new_team_id}`);
-      }
+    if (description && description !== ticket.description) {
+      updateFields.description = description;
+      hasChanges = true;
+      console.log(`📝 Description updated`);
     }
 
     // Update ticket if there are changes
     if (hasChanges) {
       updateFields.updated_at = new Date();
+      
+      console.log('📝 Update fields:', JSON.stringify(updateFields));
       
       const result = await db.collection('tickets').updateOne(
         { ticket_id: parseInt(ticketId) },
@@ -2810,6 +5062,9 @@ app.put('/api/tickets/:ticketId', authenticateToken, requireDatabase, async (req
         return res.status(404).json({ success: false, message: 'Ticket not found' });
       }
 
+      console.log(`✅ Ticket ${ticketId} updated successfully`);
+
+      // Log the change
       await db.collection('ticket_logs').insertOne({
         log_id: await getNextSequence('logId'),
         ticket_id: parseInt(ticketId),
@@ -2817,20 +5072,80 @@ app.put('/api/tickets/:ticketId', authenticateToken, requireDatabase, async (req
         change_description: changeDescription,
         created_at: new Date()
       });
-      console.log(`📝 Log created: ${changeDescription}`);
+
+      // Create notification for ticket owner
+      await createComprehensiveNotification({
+        user_id: ticket.user_id,
+        title: 'Ticket Updated',
+        message: `Your ticket #${ticketId} has been updated: ${changeDescription}`,
+        type: 'ticket_updated',
+        related_ticket_id: parseInt(ticketId),
+        priority: 'medium'
+      });
+
+      // If team changed, notify the new team
+      if (updateFields.team_id !== undefined && updateFields.team_id !== ticket.team_id) {
+        console.log(`🔔 Notifying team ${updateFields.team_id} about reassigned ticket`);
+        
+        // Notify all senior officers in the new team
+        const teamOfficers = await db.collection('users').find({
+          team_id: updateFields.team_id,
+          role: 'senior',
+          is_active: true
+        }).toArray();
+
+        for (const officer of teamOfficers) {
+          await createComprehensiveNotification({
+            user_id: officer.user_id,
+            title: 'New Ticket in Team Queue',
+            message: `Ticket #${ticketId} has been reassigned to your team`,
+            type: 'ticket_reassigned',
+            related_ticket_id: parseInt(ticketId),
+            priority: 'high'
+          });
+        }
+      }
     }
 
     // Add comment if provided
-    if (comment_text && comment_text.trim()) {
-      await db.collection('comments').insertOne({
-        comment_id: await getNextSequence('commentId'),
-        ticket_id: parseInt(ticketId),
-        author_id: req.user.id,
-        comment_text: comment_text.trim(),
-        created_at: new Date()
-      });
-      console.log(`💬 Comment added: ${comment_text.trim()}`);
-      hasChanges = true;
+    // Inside your PUT /api/tickets/:ticketId endpoint
+// Add comment if provided - THIS IS THE KEY FIX
+if (comment_text && comment_text.trim()) {
+  const commentId = await getNextSequence('commentId');
+  
+  await db.collection('comments').insertOne({
+    _id: commentId,
+    comment_id: commentId,
+    ticket_id: parseInt(ticketId),
+    author_id: req.user.id,
+    author_name: req.user.name, // IMPORTANT: Include author name
+    comment_text: comment_text.trim(),
+    created_at: new Date()
+  });
+  
+  console.log(`💬 Comment added to ticket ${ticketId} by ${req.user.name}: "${comment_text.trim().substring(0, 50)}..."`);
+  
+  // Create notification for the comment
+  await createCommentNotification(
+    parseInt(ticketId), 
+    req.user.id, 
+    req.user.name, 
+    comment_text.trim()
+  );
+}
+
+    // If ticket was reassigned to a new team, try to auto-assign it
+    if (updateFields.team_id !== undefined && updateFields.team_id !== ticket.team_id) {
+      setTimeout(async () => {
+        try {
+          const assigned = await processTicketAssignment(parseInt(ticketId));
+          if (assigned) {
+            console.log(`🚀 Auto-assigned reassigned ticket ${ticketId}`);
+          }
+        } catch (error) {
+          console.error('Auto-assignment error:', error);
+        }
+      }, 2000);
     }
 
     const finalMessage = hasChanges
@@ -2852,15 +5167,17 @@ app.put('/api/tickets/:ticketId', authenticateToken, requireDatabase, async (req
   }
 });
 
-// Update ticket status
+
+
+
+
+
+
+// Enhanced ticket status update
 app.put('/api/tickets/:ticketId/status', authenticateToken, requireSeniorOrAdmin, requireDatabase, async (req, res) => {
   try {
     const { ticketId } = req.params;
     const { status } = req.body;
-    
-    if (!status) {
-      return res.status(400).json({ success: false, message: 'Status is required' });
-    }
     
     console.log(`🔄 [PUT] Status update for ticket ${ticketId} by user ${req.user.id}: ${status}`);
     
@@ -2869,13 +5186,7 @@ app.put('/api/tickets/:ticketId/status', authenticateToken, requireSeniorOrAdmin
       return res.status(404).json({ success: false, message: 'Ticket not found' });
     }
     
-    if (req.user.role === 'senior' && ticket.team_id !== req.user.team_id) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
-    
-    if (status === ticket.status) {
-      return res.status(400).json({ success: false, message: 'Ticket already has this status' });
-    }
+    // Permission checks...
     
     const result = await db.collection('tickets').updateOne(
       { ticket_id: parseInt(ticketId) },
@@ -2890,6 +5201,16 @@ app.put('/api/tickets/:ticketId/status', authenticateToken, requireSeniorOrAdmin
     if (result.matchedCount === 0) {
       return res.status(404).json({ success: false, message: 'Ticket not found' });
     }
+    
+    // 🔔 ENHANCED NOTIFICATION FOR STATUS CHANGE
+    await createComprehensiveNotification({
+  user_id: ticket.user_id,
+  title: `Ticket ${status}`,
+  message: `Your ticket #${ticketId} status has been changed to ${status} by ${req.user.name}.`,
+  type: 'ticket_status',
+  related_ticket_id: parseInt(ticketId),
+  priority: 'medium'
+});
     
     await db.collection('ticket_logs').insertOne({
       log_id: await getNextSequence('logId'),
@@ -2910,6 +5231,9 @@ app.put('/api/tickets/:ticketId/status', authenticateToken, requireSeniorOrAdmin
     res.status(500).json({ success: false, message: 'Server error: ' + error.message });
   }
 });
+
+
+
 
 // Close ticket endpoint
 app.put('/api/tickets/:id/close', authenticateToken, requireDatabase, async (req, res) => {
@@ -2940,6 +5264,18 @@ app.put('/api/tickets/:id/close', authenticateToken, requireDatabase, async (req
         } 
       }
     );
+
+    // Create notification for ticket closure
+    if (ticket.assigned_to) {
+  await createComprehensiveNotification({
+    user_id: ticket.assigned_to,
+    title: 'Ticket Closed',
+    message: `Ticket #${ticketId} has been closed by ${req.user.name}.`,
+    type: 'ticket_closed',
+    related_ticket_id: parseInt(ticketId),
+    priority: 'medium'
+  });
+}
 
     // Log the closure
     await db.collection('ticket_logs').insertOne({
@@ -3008,6 +5344,16 @@ app.put('/api/tickets/:ticketId/assign', authenticateToken, requireSeniorOrAdmin
       return res.status(404).json({ success: false, message: 'Ticket not found' });
     }
     
+    // Create notification for the assigned officer
+   // Create notification for the assigned officer - USE THE ACTUAL ticketId
+await createComprehensiveNotification({
+  user_id: availableOfficer.user_id,
+  title: 'New Ticket Assigned',
+  message: `You have been assigned a new ${issueType} ticket: "${description.substring(0, 100)}..."`,
+  type: 'ticket_assigned',
+  related_ticket_id: ticketId,  // ← Use the actual ticketId variable
+  priority: 'high'
+});
     await db.collection('ticket_logs').insertOne({
       log_id: await getNextSequence('logId'),
       ticket_id: parseInt(ticketId),
@@ -3080,20 +5426,45 @@ app.get('/api/user-tickets', authenticateToken, requireDatabase, async (req, res
   }
 });
 
+
+
+
+
+
+
+
+
+
+
+
 // Senior officer dashboard
+// Senior officer dashboard - FIXED VERSION
 app.get('/api/senior-dashboard', authenticateToken, requireSeniorOrAdmin, requireDatabase, async (req, res) => {
   try {
     console.log(`📊 Senior dashboard request from user: ${req.user.id}, role: ${req.user.role}, team: ${req.user.team_id}`);
 
-    let matchStage = { 
-      status: { $nin: ['Closed', 'Queued'] } 
-    };
+    let matchStage = {};
     
     if (req.user.role === 'senior') {
-      matchStage.team_id = req.user.team_id;
-      matchStage.assigned_to = req.user.id;
-      console.log(`🔍 Filtering tickets for team ID: ${req.user.team_id} assigned to user: ${req.user.id}`);
+      // FIXED: Show ALL tickets that belong to the officer's team, regardless of assignment status
+      // This ensures reassigned tickets appear in the new team's dashboard
+      matchStage = {
+        team_id: req.user.team_id,
+        status: { $nin: ['Closed'] } // Exclude only closed tickets
+      };
+    } else if (req.user.role === 'admin') {
+      // Admin sees all non-closed tickets
+      matchStage = {
+        status: { $nin: ['Closed'] }
+      };
+    } else {
+      // Regular users only see their own tickets
+      matchStage = {
+        user_id: req.user.id
+      };
     }
+    
+    console.log('🔍 Match stage:', JSON.stringify(matchStage));
     
     const tickets = await db.collection('tickets').aggregate([
       { $match: matchStage },
@@ -3141,6 +5512,8 @@ app.get('/api/senior-dashboard', authenticateToken, requireSeniorOrAdmin, requir
           team_id: 1,
           assigned_to: 1,
           attachment: 1,
+          steps_to_reproduce: 1,
+          additional_notes: 1,
           in_queue: 1,
           queue_position: 1,
           ai_confidence: 1,
@@ -3157,7 +5530,12 @@ app.get('/api/senior-dashboard', authenticateToken, requireSeniorOrAdmin, requir
       { $sort: { created_at: -1 } }
     ]).toArray();
 
-    console.log(`📋 Found ${tickets.length} active tickets for senior officer`);
+    console.log(`📋 Found ${tickets.length} tickets for team ${req.user.team_id}`);
+
+    // Log each ticket's team assignment for debugging
+    tickets.forEach(ticket => {
+      console.log(`  Ticket #${ticket.ticket_id}: Team ${ticket.team_id}, Assigned to: ${ticket.assigned_to_name || 'Unassigned'}, Status: ${ticket.status}`);
+    });
 
     let teamName = 'All Teams';
     if (req.user.role === 'senior' && req.user.team_id) {
@@ -3167,13 +5545,14 @@ app.get('/api/senior-dashboard', authenticateToken, requireSeniorOrAdmin, requir
       }
     }
     
-    console.log(`✅ Sending ${tickets.length} tickets to dashboard`);
+    console.log(`✅ Sending ${tickets.length} tickets to dashboard for team: ${teamName}`);
     
     res.json({
       success: true,
       tickets,
       teamName,
-      userRole: req.user.role
+      userRole: req.user.role,
+      teamId: req.user.team_id
     });
   } catch (error) {
     console.error('❌ Senior dashboard error:', error);
@@ -3181,69 +5560,68 @@ app.get('/api/senior-dashboard', authenticateToken, requireSeniorOrAdmin, requir
   }
 });
 
-// Get ticket comments
-app.get('/api/tickets/:ticketId/comments', authenticateToken, requireDatabase, async (req, res) => {
+
+
+
+
+
+
+
+
+
+// Add comment to ticket - UPDATED WITH NOTIFICATIONS
+app.post('/api/tickets/:ticketId/comments', authenticateToken, requireDatabase, async (req, res) => {
   try {
     const { ticketId } = req.params;
-    console.log(`💬 [GET] Fetching comments for ticket ${ticketId} by user ${req.user.id}`);
+    const { comment_text } = req.body;
+    
+    console.log(`💬 [POST] Adding comment to ticket ${ticketId} by user ${req.user.id}`);
+    
+    if (!comment_text || !comment_text.trim()) {
+      return res.status(400).json({ success: false, message: 'Comment text is required' });
+    }
     
     const ticket = await db.collection('tickets').findOne({ ticket_id: parseInt(ticketId) });
     if (!ticket) {
-      console.log(`❌ Ticket ${ticketId} not found`);
       return res.status(404).json({ success: false, message: 'Ticket not found' });
     }
     
-    if (req.user.role === 'user' && ticket.user_id !== req.user.id) {
-      console.log(`❌ User ${req.user.id} cannot access ticket ${ticketId}`);
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
+    // Permission checks...
     
-    if (req.user.role === 'senior' && ticket.team_id !== req.user.team_id) {
-      console.log(`❌ Senior officer from team ${req.user.team_id} cannot access ticket from team ${ticket.team_id}`);
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
+    await db.collection('comments').insertOne({
+      comment_id: await getNextSequence('commentId'),
+      ticket_id: parseInt(ticketId),
+      author_id: req.user.id,
+      comment_text: comment_text.trim(),
+      created_at: new Date()
+    });
     
-    console.log(`✅ Permission granted, fetching comments for ticket ${ticketId}`);
+    // 🔔 CREATE NOTIFICATION FOR COMMENT
+    await createCommentNotification(
+      parseInt(ticketId), 
+      req.user.id, 
+      req.user.name, 
+      comment_text.trim()
+    );
     
-    const comments = await db.collection('comments').aggregate([
-      { $match: { ticket_id: parseInt(ticketId) } },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'author_id',
-          foreignField: 'user_id',
-          as: 'author_info'
-        }
-      },
-      {
-        $unwind: { path: '$author_info', preserveNullAndEmptyArrays: true }
-      },
-      {
-        $project: {
-          comment_id: 1,
-          comment_text: 1,
-          created_at: 1,
-          author_name: '$author_info.name',
-          author_id: '$author_info.user_id'
-        }
-      },
-      { $sort: { created_at: 1 } }
-    ]).toArray();
+    console.log(`✅ Comment added to ticket ${ticketId}`);
     
-    console.log(`✅ Found ${comments.length} comments for ticket ${ticketId}`);
-    
-    res.json({
+    res.status(201).json({
       success: true,
-      comments,
+      message: 'Comment added successfully',
     });
   } catch (error) {
-    console.error('❌ Fetch ticket comments error:', error);
+    console.error('❌ Add comment error:', error);
     res.status(500).json({ 
       success: false, 
       message: 'Server error: ' + error.message 
     });
   }
 });
+
+
+
+
 
 // Add comment to ticket
 app.post('/api/tickets/:ticketId/comments', authenticateToken, requireDatabase, async (req, res) => {
@@ -3284,6 +5662,22 @@ app.post('/api/tickets/:ticketId/comments', authenticateToken, requireDatabase, 
       created_at: new Date()
     });
     
+    // Create notification for comment
+    const notificationUserIds = [ticket.user_id];
+    if (ticket.assigned_to && ticket.assigned_to !== req.user.id) {
+      notificationUserIds.push(ticket.assigned_to);
+    }
+    
+    for (const userId of notificationUserIds) {
+      await createNotification({
+        user_id: userId,
+        title: 'New Comment on Ticket',
+        message: `${req.user.name} added a comment to ticket #${ticketId}: "${comment_text.substring(0, 100)}..."`,
+        type: 'comment_added',
+        related_ticket_id: parseInt(ticketId)
+      });
+    }
+    
     console.log(`✅ Comment added to ticket ${ticketId}`);
     
     res.status(201).json({
@@ -3298,6 +5692,61 @@ app.post('/api/tickets/:ticketId/comments', authenticateToken, requireDatabase, 
     });
   }
 });
+
+
+
+// GET /api/tickets/:ticketId/comments endpoint
+app.get('/api/tickets/:ticketId/comments', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+    
+    // Check permissions...
+    
+    // Fetch comments with author information
+    const comments = await db.collection('comments').aggregate([
+      { $match: { ticket_id: parseInt(ticketId) } },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'author_id',
+          foreignField: 'user_id',
+          as: 'author_info'
+        }
+      },
+      {
+        $unwind: { path: '$author_info', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $project: {
+          _id: 1,
+          comment_id: 1,
+          ticket_id: 1,
+          author_id: 1,
+          comment_text: 1,
+          created_at: 1,
+          author_name: { 
+            $ifNull: ['$author_info.name', '$author_name'] 
+          }
+        }
+      },
+      { $sort: { created_at: 1 } }
+    ]).toArray();
+    
+    console.log(`✅ Found ${comments.length} comments for ticket ${ticketId}`);
+    
+    res.json({
+      success: true,
+      comments
+    });
+  } catch (error) {
+    console.error('❌ Fetch comments error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch comments: ' + error.message 
+    });
+  }
+});
+
 
 // Get ticket logs
 app.get('/api/tickets/:ticketId/logs', authenticateToken, requireDatabase, async (req, res) => {
@@ -3362,9 +5811,6 @@ app.get('/api/tickets/:ticketId/logs', authenticateToken, requireDatabase, async
     });
   }
 });
-
-
-
 
 // Enhanced queue info endpoint
 app.get('/api/queue-info', authenticateToken, requireDatabase, async (req, res) => {
@@ -3475,16 +5921,6 @@ app.get('/api/queue-info', authenticateToken, requireDatabase, async (req, res) 
   }
 });
 
-
-
-
-
-
-
-
-
-
-
 // ========== PUBLIC STATS ENDPOINTS ==========
 
 // Public system statistics (available to everyone)
@@ -3533,17 +5969,6 @@ app.get('/api/public/tickets-count', requireDatabase, async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to fetch tickets count' });
   }
 });
-
-
-
-
-
-
-
-
-
-
-
 
 // Add this route to your server.js file
 app.post('/api/admin/create-team-officers-safe', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
@@ -3619,13 +6044,13 @@ app.post('/api/admin/create-team-officers-safe', authenticateToken, requireAdmin
 
 
 
-
-
 // Admin-only registration for senior officers
+// Admin-only registration for senior officers - WITH EMAIL NOTIFICATIONS
+// Admin-only registration for senior officers - WITH CREDENTIALS TO BOTH
 app.post('/api/admin/register-senior', authenticateToken, requireAdmin, requireDatabase, upload.single('avatar'), async (req, res) => {
   try {
     const { name, email, password, confirm_password, phone_number, team_id, role = 'senior' } = req.body;
-    console.log(`Senior officer register request: ${JSON.stringify(req.body)} at ${new Date().toISOString()}`);
+    console.log(`Senior officer register request: ${JSON.stringify({ name, email, team_id })} at ${new Date().toISOString()}`);
     
     if (!name || !email || !password || !confirm_password || !team_id) {
       return res.status(400).json({ success: false, message: 'Name, email, password, confirm password, and team are required' });
@@ -3668,19 +6093,146 @@ app.post('/api/admin/register-senior', authenticateToken, requireAdmin, requireD
     
     await db.collection('users').insertOne(userDoc);
     
+    const adminName = req.user.name;
+    const adminEmail = req.user.email;
+
+    // 🔥 SEND WELCOME EMAIL TO THE NEW SENIOR OFFICER (WITH CREDENTIALS)
+    try {
+      const welcomeHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+          <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
+            <h1 style="color: white; margin: 0;">🎉 Welcome Senior Officer!</h1>
+          </div>
+          <div style="padding: 20px;">
+            <h2 style="color: #333;">Hello ${name},</h2>
+            <p style="font-size: 16px; color: #555; line-height: 1.6;">
+              You have been registered as a Senior Officer in the IT Help Desk System.
+            </p>
+            <div style="background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <h3 style="color: #856404; margin-top: 0;">📋 Your Login Credentials:</h3>
+              <p style="margin: 5px 0; color: #856404; font-size: 14px;">
+                <strong>Email:</strong> ${email}<br>
+                <strong>Password:</strong> ${password}<br>
+                <strong>Login URL:</strong> <a href="http://localhost:3000/login" style="color: #007bff;">http://localhost:3000/login</a>
+              </p>
+              <p style="margin: 10px 0 0 0; color: #856404; font-size: 12px;">
+                ⚠️ Please change your password after first login for security.
+              </p>
+            </div>
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <p style="margin: 0; color: #666; font-size: 14px;">
+                <strong>Name:</strong> ${name}<br>
+                <strong>Email:</strong> ${email}<br>
+                <strong>Role:</strong> Senior Officer<br>
+                <strong>Team:</strong> ${team.team_name}<br>
+                <strong>Created By:</strong> Admin (${adminName})<br>
+                <strong>Account Created:</strong> ${new Date().toLocaleString()}
+              </p>
+            </div>
+            <p style="color: #888; font-size: 14px;">
+              You can now log in and manage tickets assigned to your team.
+            </p>
+          </div>
+          <div style="background-color: #f8f9fa; padding: 15px; border-radius: 0 0 10px 10px; text-align: center;">
+            <p style="margin: 0; color: #666; font-size: 12px;">
+              Ethiopian Statistical Service IT Help Desk
+            </p>
+          </div>
+        </div>
+      `;
+      
+      const mailOptions = {
+        from: '"IT Help Desk" <hussenseid670@gmail.com>',
+        to: email,
+        subject: '🎉 Welcome to IT Help Desk - Senior Officer Account',
+        html: welcomeHtml
+      };
+      
+      await transporter.sendMail(mailOptions);
+      console.log(`✅ Welcome email with credentials sent to senior officer: ${email}`);
+    } catch (emailError) {
+      console.error('❌ Welcome email to senior officer failed:', emailError.message);
+    }
+
+    // 🔥 SEND CONFIRMATION EMAIL TO THE ADMIN WITH THE PASSWORD
+    try {
+      const adminConfirmHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+          <div style="background: #007bff; padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
+            <h1 style="color: white; margin: 0;">✅ Senior Officer Created</h1>
+          </div>
+          <div style="padding: 20px;">
+            <h2 style="color: #333;">Hello ${adminName},</h2>
+            <p style="font-size: 16px; color: #555; line-height: 1.6;">
+              You have successfully created a new Senior Officer account.
+            </p>
+            <div style="background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <h3 style="color: #856404; margin-top: 0;">📋 Officer Credentials (for your records):</h3>
+              <p style="margin: 5px 0; color: #856404; font-size: 14px;">
+                <strong>Name:</strong> ${name}<br>
+                <strong>Email:</strong> ${email}<br>
+                <strong>Password Set:</strong> ${password}<br>
+                <strong>Role:</strong> Senior Officer<br>
+                <strong>Team:</strong> ${team.team_name}<br>
+                <strong>User ID:</strong> ${userId}
+              </p>
+              <p style="margin: 10px 0 0 0; color: #856404; font-size: 12px;">
+                📝 Please keep these credentials for your records.
+              </p>
+            </div>
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <p style="margin: 0; color: #666; font-size: 14px;">
+                <strong>Created By:</strong> ${adminName} (You)<br>
+                <strong>Created At:</strong> ${new Date().toLocaleString()}
+              </p>
+            </div>
+          </div>
+          <div style="background-color: #f8f9fa; padding: 15px; border-radius: 0 0 10px 10px; text-align: center;">
+            <p style="margin: 0; color: #666; font-size: 12px;">
+              Ethiopian Statistical Service IT Help Desk - Admin Confirmation
+            </p>
+          </div>
+        </div>
+      `;
+      
+      const adminMailOptions = {
+        from: '"IT Help Desk" <hussenseid670@gmail.com>',
+        to: adminEmail || 'seidhussen0729@gmail.com',
+        subject: `✅ Senior Officer Created: ${name} (${email}) - ${team.team_name}`,
+        html: adminConfirmHtml
+      };
+      
+      await transporter.sendMail(adminMailOptions);
+      console.log(`✅ Confirmation email with credentials sent to admin: ${adminEmail}`);
+    } catch (emailError) {
+      console.error('❌ Admin confirmation email failed:', emailError.message);
+    }
+
+    // 🔥 ALSO NOTIFY SUPER ADMIN
+    try {
+      await notifyAdmin('👤 New Senior Officer Created', 
+        `Admin ${adminName} created a new Senior Officer: ${name} (${email}) for ${team.team_name}. Password: ${password}`, {
+        userName: name,
+        userEmail: email,
+        action: 'admin_created_senior'
+      });
+      console.log('✅ Super admin notified about new senior officer');
+    } catch (superAdminEmailError) {
+      console.error('❌ Super admin notification failed:', superAdminEmailError.message);
+    }
+    
     const newUser = await db.collection('users').findOne(
       { user_id: userId },
       { projection: { password: 0 } }
     );
     
-    console.log(`Senior officer registered successfully: ${JSON.stringify(newUser)} at ${new Date().toISOString()}`);
     res.status(201).json({
       success: true,
       message: 'Senior officer registered successfully',
       user: newUser,
     });
   } catch (error) {
-    console.error(`Senior officer registration error at ${new Date().toISOString()}:`, error);
+    console.error(`Senior officer registration error:`, error);
     res.status(500).json({ success: false, message: 'Server error during registration: ' + error.message });
   }
 });
@@ -3876,6 +6428,7 @@ app.get('/api/admin/dashboard', authenticateToken, requireAdmin, requireDatabase
     const openTickets = await db.collection('tickets').countDocuments({ status: 'In Progress' });
     const queuedTickets = await db.collection('tickets').countDocuments({ status: 'Queued' });
     const closedTickets = await db.collection('tickets').countDocuments({ status: 'Closed' });
+    const totalNotifications = await db.collection('notifications').countDocuments();
     
     // Get tickets by issue type
     const ticketsByType = await db.collection('tickets').aggregate([
@@ -3970,7 +6523,8 @@ app.get('/api/admin/dashboard', authenticateToken, requireAdmin, requireDatabase
           tickets: totalTickets,
           open: openTickets,
           queued: queuedTickets,
-          closed: closedTickets
+          closed: closedTickets,
+          notifications: totalNotifications
         },
         byType: ticketsByType,
         byPriority: ticketsByPriority,
@@ -4228,6 +6782,10 @@ app.post('/api/admin/reset-auto-increment', authenticateToken, requireAdmin, req
       { $set: { sequence_value: 1 } }
     );
     await db.collection('counters').updateOne(
+      { _id: 'notificationId' },
+      { $set: { sequence_value: 1 } }
+    );
+    await db.collection('counters').updateOne(
       { _id: 'teamId' },
       { $set: { sequence_value: 10 } }
     );
@@ -4360,60 +6918,1306 @@ app.get('/api/debug/routes', (req, res) => {
   res.json({ routes });
 });
 
-// Error handling middleware
-app.use((error, req, res, next) => {
-  if (error instanceof multer.MulterError) {
-    if (error.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({ success: false, message: 'File too large' });
-    }
+
+
+
+
+
+// Add this function after your email configuration
+async function sendEmailNotification(email, subject, htmlContent) {
+  try {
+    const mailOptions = {
+      from: '"IT Help Desk" <noreply@ethiopianstatisticalservice.com>',
+      to: email,
+      subject: subject,
+      html: htmlContent
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log(`✅ Email sent to: ${email}`);
+    return true;
+  } catch (error) {
+    console.error('❌ Email sending failed:', error);
+    return false;
   }
-  res.status(500).json({ success: false, message: error.message });
+}
+
+
+
+
+
+// ========== SYSTEM CONFIGURATION ROUTES ==========
+
+// Get system configuration
+app.get('/api/admin/system-config', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
+  try {
+    const config = await db.collection('system_config').findOne({ _id: 'main' });
+    
+    if (!config) {
+      // Return default config
+      const defaultConfig = {
+        _id: 'main',
+        system_name: 'Help Desk System',
+        support_email: 'support@example.com',
+        max_tickets_per_user: 5,
+        auto_assign_tickets: true,
+        ticket_timeout_hours: 168,
+        notification_enabled: true,
+        backup_enabled: true,
+        backup_frequency: 'daily',
+        sla_response_time: 2,
+        sla_resolution_time: 48,
+        updated_at: new Date()
+      };
+      return res.json({ success: true, config: defaultConfig });
+    }
+    
+    res.json({ success: true, config });
+  } catch (error) {
+    console.error('Get system config error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
 });
 
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    message: 'Endpoint not found',
-    path: req.path,
-    method: req.method,
-  });
+// Update system configuration
+app.put('/api/admin/system-config', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
+  try {
+    const configData = req.body;
+    
+    const result = await db.collection('system_config').updateOne(
+      { _id: 'main' },
+      { 
+        $set: { 
+          ...configData,
+          updated_at: new Date(),
+          updated_by: req.user.id
+        } 
+      },
+      { upsert: true }
+    );
+    
+    console.log('✅ System configuration updated by admin:', req.user.id);
+    
+    res.json({ 
+      success: true, 
+      message: 'System configuration saved successfully' 
+    });
+  } catch (error) {
+    console.error('Update system config error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
 });
 
-// Auto-process queue every 20 seconds
-setInterval(async () => {
+// Manual backup endpoint
+app.post('/api/admin/backup', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
   try {
-    if (isDatabaseConnected) {
-      const assignedCount = await processAllQueuedTickets();
-      if (assignedCount > 0) {
-        console.log(`🔄 Background assignment: ${assignedCount} tickets assigned`);
+    // Create backup of essential collections
+    const backup = {
+      timestamp: new Date(),
+      users: await db.collection('users').find({}, { projection: { password: 0 } }).toArray(),
+      tickets: await db.collection('tickets').find().toArray(),
+      teams: await db.collection('teams').find().toArray(),
+      config: await db.collection('system_config').find().toArray()
+    };
+    
+    // Save backup to backups collection
+    await db.collection('backups').insertOne({
+      backup_id: await getNextSequence('backupId'),
+      backup_data: backup,
+      created_by: req.user.id,
+      created_at: new Date()
+    });
+    
+    console.log('✅ Manual backup completed by admin:', req.user.id);
+    
+    res.json({ 
+      success: true, 
+      message: 'Backup completed successfully' 
+    });
+  } catch (error) {
+    console.error('Backup error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+
+
+
+
+
+// CREATE procurement request - MUST come BEFORE parameterized routes
+// CREATE procurement request - WITH EMAIL NOTIFICATIONS
+// CREATE procurement request - FIXED WITH EMAIL NOTIFICATIONS
+// CREATE procurement request - COMPLETELY FIXED WITH EMAIL NOTIFICATIONS
+// CREATE procurement request - COMPLETELY FIXED
+app.post('/api/procurement-requests', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    const {
+      ticket_id,
+      item_name,
+      category,
+      quantity,
+      urgency,
+      estimated_cost,
+      specifications,
+      vendor_info,
+      notes,
+      requested_by,
+      requested_by_name
+    } = req.body;
+
+    console.log('🛒 ========================================');
+    console.log('🛒 PROCUREMENT REQUEST RECEIVED:');
+    console.log('🛒 ticket_id:', ticket_id);
+    console.log('🛒 item_name:', item_name);
+    console.log('🛒 requested_by:', requested_by);
+    console.log('🛒 requested_by_name:', requested_by_name);
+    console.log('🛒 req.user:', { id: req.user.id, name: req.user.name, role: req.user.role });
+    console.log('🛒 ========================================');
+
+    if (!ticket_id || !item_name || !category || !quantity || !urgency) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: ticket_id, item_name, category, quantity, and urgency are required'
+      });
+    }
+
+    // Get the ticket to find the ticket owner
+    const ticket = await db.collection('tickets').findOne({ ticket_id: parseInt(ticket_id) });
+    
+    const procurementRequest = {
+      ticket_id: ticket_id.toString(),
+      item_name,
+      category,
+      quantity: parseInt(quantity),
+      urgency,
+      estimated_cost: estimated_cost || '',
+      specifications: specifications || '',
+      vendor_info: vendor_info || '',
+      notes: notes || '',
+      requested_by: requested_by || req.user.id,
+      requested_by_name: requested_by_name || req.user.name,
+      status: 'pending',
+      messages: [],
+      created_at: new Date(),
+      updated_at: new Date()
+    };
+
+    const result = await db.collection('procurement_requests').insertOne(procurementRequest);
+    console.log('✅ Procurement request saved:', result.insertedId);
+
+    // 🔥 FIND TICKET OWNER AND SEND EMAIL
+    if (ticket) {
+      const ticketOwner = await db.collection('users').findOne({ user_id: ticket.user_id });
+      
+      if (ticketOwner && ticketOwner.email) {
+        console.log(`📧 Found ticket owner: ${ticketOwner.name} (${ticketOwner.email})`);
+        
+        try {
+          const equipmentHtml = `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+              <div style="background: #ffc107; padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
+                <h1 style="color: #333; margin: 0;">🛒 Equipment Request Submitted</h1>
+              </div>
+              <div style="padding: 20px;">
+                <h2 style="color: #333;">Hello ${ticketOwner.name},</h2>
+                <p style="font-size: 16px; color: #555; line-height: 1.6;">
+                  An equipment request has been submitted for your ticket by ${req.user.name}.
+                </p>
+                <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                  <p style="margin: 0; color: #666; font-size: 14px;">
+                    <strong>Ticket ID:</strong> #${ticket_id}<br>
+                    <strong>Item:</strong> ${item_name}<br>
+                    <strong>Category:</strong> ${category}<br>
+                    <strong>Quantity:</strong> ${quantity}<br>
+                    <strong>Urgency:</strong> ${urgency}<br>
+                    <strong>Estimated Cost:</strong> ${estimated_cost || 'N/A'}<br>
+                    <strong>Requested By:</strong> ${req.user.name} (${req.user.role})<br>
+                    <strong>Status:</strong> Pending Approval<br>
+                    <strong>Date:</strong> ${new Date().toLocaleString()}
+                  </p>
+                </div>
+                ${specifications ? `<p style="font-size: 14px; color: #555;"><strong>Specifications:</strong> ${specifications}</p>` : ''}
+                ${notes ? `<p style="font-size: 14px; color: #555;"><strong>Notes:</strong> ${notes}</p>` : ''}
+                <p style="color: #888; font-size: 14px;">
+                  You will be notified when the status of this request changes.
+                </p>
+              </div>
+              <div style="background-color: #f8f9fa; padding: 15px; border-radius: 0 0 10px 10px; text-align: center;">
+                <p style="margin: 0; color: #666; font-size: 12px;">
+                  Ethiopian Statistical Service IT Help Desk
+                </p>
+              </div>
+            </div>
+          `;
+          
+          const mailOptions = {
+            from: '"IT Help Desk" <hussenseid670@gmail.com>',
+            to: ticketOwner.email,
+            subject: `🛒 Equipment Request for Your Ticket #${ticket_id}: ${item_name}`,
+            html: equipmentHtml
+          };
+          
+          await transporter.sendMail(mailOptions);
+          console.log(`✅ Equipment request email sent to ticket owner: ${ticketOwner.email}`);
+        } catch (emailError) {
+          console.error('❌ Equipment request email failed:', emailError.message);
+        }
+      } else {
+        console.log('⚠️ Ticket owner not found or has no email');
+      }
+    } else {
+      console.log('⚠️ Ticket not found for equipment request notification');
+    }
+
+    // 🔥 NOTIFY ADMIN
+    try {
+      await notifyAdmin('🛒 New Equipment Request', 
+        `Equipment request for "${item_name}" in ticket #${ticket_id} by ${req.user.name}.`, {
+        userName: req.user.name,
+        userEmail: req.user.email || 'N/A',
+        ticketId: ticket_id,
+        action: 'equipment_request'
+      });
+      console.log('✅ Admin notified about equipment request');
+    } catch (adminEmailError) {
+      console.error('❌ Admin notification failed:', adminEmailError.message);
+    }
+
+    // Create database notification for ticket owner
+    if (ticket) {
+      await createComprehensiveNotification({
+        user_id: ticket.user_id,
+        title: '🛒 Equipment Request Submitted',
+        message: `An equipment request for "${item_name}" has been submitted for your ticket #${ticket_id} by ${req.user.name}.`,
+        type: 'procurement',
+        related_ticket_id: parseInt(ticket_id),
+        related_request_id: result.insertedId.toString(),
+        priority: 'high'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Procurement request submitted successfully',
+      request: {
+        _id: result.insertedId,
+        ...procurementRequest
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Procurement request error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to submit procurement request: ' + error.message
+    });
+  }
+});
+
+
+
+
+
+
+
+
+// FIXED: Update procurement request status with proper notification mapping
+// FIXED: Update procurement request status WITH EMAIL TO USER
+app.put('/api/procurement-requests/:requestId/status', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { status, admin_notes } = req.body;
+
+    console.log('🔄 Updating procurement request status:', requestId, 'to:', status);
+
+    const currentRequest = await db.collection('procurement_requests').findOne({
+      _id: new ObjectId(requestId)
+    });
+
+    if (!currentRequest) {
+      return res.status(404).json({
+        success: false,
+        message: 'Procurement request not found'
+      });
+    }
+
+    const updateData = {
+      status: status,
+      updated_at: new Date()
+    };
+
+    if (admin_notes) {
+      updateData.admin_notes = admin_notes;
+    }
+
+    const result = await db.collection('procurement_requests').updateOne(
+      { _id: new ObjectId(requestId) },
+      { $set: updateData }
+    );
+
+    if (result.modifiedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Procurement request not found'
+      });
+    }
+
+    // 🔥 SEND EMAIL TO TICKET OWNER ABOUT STATUS CHANGE
+    const ticket = await db.collection('tickets').findOne({ ticket_id: parseInt(currentRequest.ticket_id) });
+    if (ticket) {
+      const ticketOwner = await db.collection('users').findOne({ user_id: ticket.user_id });
+      
+      if (ticketOwner && ticketOwner.email) {
+        const statusEmojis = {
+          'approved': '✅',
+          'rejected': '❌',
+          'ordered': '📦',
+          'delivered': '🎁',
+          'cancelled': '🚫',
+          'pending': '⏳'
+        };
+        
+        const statusMessages = {
+          'approved': 'Your equipment request has been approved!',
+          'rejected': 'Your equipment request has been rejected.',
+          'ordered': 'Your equipment has been ordered.',
+          'delivered': 'Your equipment has been delivered!',
+          'cancelled': 'Your equipment request has been cancelled.',
+          'pending': 'Your equipment request is pending.'
+        };
+
+        const emoji = statusEmojis[status] || '📋';
+        const statusMessage = statusMessages[status] || `Status updated to: ${status}`;
+
+        try {
+          const statusHtml = `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+              <div style="background: ${status === 'approved' ? '#28a745' : status === 'rejected' ? '#dc3545' : '#007bff'}; padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
+                <h1 style="color: white; margin: 0;">${emoji} Equipment Request Update</h1>
+              </div>
+              <div style="padding: 20px;">
+                <h2 style="color: #333;">Hello ${ticketOwner.name},</h2>
+                <p style="font-size: 16px; color: #555; line-height: 1.6;">${statusMessage}</p>
+                <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                  <p style="margin: 0; color: #666; font-size: 14px;">
+                    <strong>Item:</strong> ${currentRequest.item_name}<br>
+                    <strong>Ticket ID:</strong> #${currentRequest.ticket_id}<br>
+                    <strong>New Status:</strong> ${status.toUpperCase()}<br>
+                    <strong>Updated By:</strong> ${req.user.name}<br>
+                    <strong>Date:</strong> ${new Date().toLocaleString()}
+                    ${admin_notes ? `<br><strong>Notes:</strong> ${admin_notes}` : ''}
+                  </p>
+                </div>
+              </div>
+              <div style="background-color: #f8f9fa; padding: 15px; border-radius: 0 0 10px 10px; text-align: center;">
+                <p style="margin: 0; color: #666; font-size: 12px;">
+                  Ethiopian Statistical Service IT Help Desk
+                </p>
+              </div>
+            </div>
+          `;
+          
+          const mailOptions = {
+            from: '"IT Help Desk" <hussenseid670@gmail.com>',
+            to: ticketOwner.email,
+            subject: `${emoji} Equipment Request ${status.toUpperCase()}: ${currentRequest.item_name} - Ticket #${currentRequest.ticket_id}`,
+            html: statusHtml
+          };
+          
+          await transporter.sendMail(mailOptions);
+          console.log(`✅ Equipment status email sent to: ${ticketOwner.email}`);
+        } catch (emailError) {
+          console.error('❌ Status email failed:', emailError.message);
+        }
       }
     }
+
+    // Database notification
+    const statusActionMap = {
+      'approved': 'approved',
+      'rejected': 'rejected',
+      'ordered': 'ordered',
+      'delivered': 'delivered',
+      'cancelled': 'cancelled',
+      'pending': 'created'
+    };
+
+    const action = statusActionMap[status];
+    if (action) {
+      await createProcurementNotification(requestId, action, req.user.name);
+    }
+
+    // Notify ticket owner in database
+    if (ticket) {
+      await createComprehensiveNotification({
+        user_id: ticket.user_id,
+        title: `🛒 Equipment Request ${status.toUpperCase()}`,
+        message: `Your equipment request for "${currentRequest.item_name}" has been ${status} by ${req.user.name}.`,
+        type: 'procurement_update',
+        related_ticket_id: parseInt(currentRequest.ticket_id),
+        related_request_id: requestId,
+        priority: 'high'
+      });
+    }
+
+    console.log('✅ Procurement request status updated');
+
+    res.json({
+      success: true,
+      message: 'Procurement request status updated successfully'
+    });
+
   } catch (error) {
-    console.error('Background queue processing error:', error);
+    console.error('❌ Update procurement status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update procurement request status: ' + error.message
+    });
   }
-}, 20 * 1000);
+});
 
-
-
-
-
-
-
-
-// ========== AUTO-PROCESS QUEUE EVERY 20 SECONDS ==========
-setInterval(async () => {
+// FIXED: Add message to procurement request with notification
+app.post('/api/procurement-requests/:requestId/messages', authenticateToken, requireDatabase, async (req, res) => {
   try {
-    if (isDatabaseConnected) {
-      const assignedCount = await processAllQueuedTickets();
-      if (assignedCount > 0) {
-        console.log(`🔄 Background assignment: ${assignedCount} tickets assigned`);
+    const { requestId } = req.params;
+    const { message, sender_id, sender_name, sender_role } = req.body;
+
+    console.log('💬 Adding message to procurement request:', requestId, 'from:', sender_name);
+
+    if (!message || !message.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Message is required'
+      });
+    }
+
+    const newMessage = {
+      message: message.trim(),
+      sender_id,
+      sender_name,
+      sender_role,
+      created_at: new Date()
+    };
+
+    // First get the procurement request to know who to notify
+    const procurementRequest = await db.collection('procurement_requests').findOne({
+      _id: new ObjectId(requestId)
+    });
+
+    if (!procurementRequest) {
+      return res.status(404).json({
+        success: false,
+        message: 'Procurement request not found'
+      });
+    }
+
+    // Add the message
+    const result = await db.collection('procurement_requests').updateOne(
+      { _id: new ObjectId(requestId) },
+      { 
+        $push: { messages: newMessage },
+        $set: { updated_at: new Date() }
       }
+    );
+
+    if (result.modifiedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Procurement request not found'
+      });
+    }
+
+    console.log('✅ Message added to procurement request');
+
+    // 🔔 SEND PROCUREMENT MESSAGE NOTIFICATION
+    await createProcurementMessageNotification(
+      requestId, 
+      sender_id, 
+      sender_name, 
+      message.trim()
+    );
+
+    res.json({
+      success: true,
+      message: 'Message added successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Add message error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to add message: ' + error.message
+    });
+  }
+});
+
+
+
+
+
+// Delete procurement request - WITH EMAIL NOTIFICATIONS
+app.delete('/api/procurement-requests/:requestId', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+
+    console.log('🗑️ Deleting procurement request:', requestId);
+
+    const procurementRequest = await db.collection('procurement_requests').findOne({
+      _id: new ObjectId(requestId)
+    });
+
+    if (!procurementRequest) {
+      return res.status(404).json({
+        success: false,
+        message: 'Procurement request not found'
+      });
+    }
+
+    // Check permissions
+    const canDelete = req.user.role === 'admin' || 
+                     procurementRequest.requested_by === req.user.id;
+    
+    if (!canDelete) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only request owner or admin can delete procurement requests.'
+      });
+    }
+
+    const result = await db.collection('procurement_requests').deleteOne({
+      _id: new ObjectId(requestId)
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Procurement request not found'
+      });
+    }
+
+    console.log('✅ Procurement request deleted');
+
+    // 🔔 SEND EMAIL NOTIFICATION FOR PROCUREMENT DELETION
+    await createComprehensiveNotification({
+      user_id: procurementRequest.requested_by,
+      title: 'Equipment Request Deleted',
+      message: `Your equipment request for "${procurementRequest.item_name}" has been deleted.`,
+      type: 'procurement_deleted',
+      related_ticket_id: procurementRequest.ticket_id,
+      priority: 'high'
+    });
+
+    // Notify assigned officer if exists
+    const ticket = await db.collection('tickets').findOne({ 
+      ticket_id: parseInt(procurementRequest.ticket_id) 
+    });
+    
+    if (ticket && ticket.assigned_to && ticket.assigned_to !== procurementRequest.requested_by) {
+      await createComprehensiveNotification({
+        user_id: ticket.assigned_to,
+        title: 'Equipment Request Deleted',
+        message: `Equipment request for "${procurementRequest.item_name}" in ticket #${procurementRequest.ticket_id} has been deleted.`,
+        type: 'procurement_deleted',
+        related_ticket_id: procurementRequest.ticket_id,
+        priority: 'medium'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Procurement request deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Delete procurement request error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete procurement request: ' + error.message
+    });
+  }
+});
+
+// Delete all messages for a procurement request
+app.delete('/api/procurement-requests/:requestId/messages', async (req, res) => {
+  try {
+    const { requestId } = req.params;
+
+    console.log('🗑️ Clearing messages for procurement request:', requestId);
+
+    const db = getDB();
+    await db.collection('procurement_requests').updateOne(
+      { _id: new ObjectId(requestId) },
+      { 
+        $set: { 
+          messages: [],
+          updated_at: new Date()
+        }
+      }
+    );
+
+    console.log('✅ Messages cleared');
+
+    res.json({
+      success: true,
+      message: 'Messages cleared successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Clear messages error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to clear messages'
+    });
+  }
+});
+
+// Update procurement request status
+app.put('/api/procurement-requests/:requestId/status', async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { status, admin_notes } = req.body;
+
+    console.log('🔄 Updating procurement request status:', requestId, 'to:', status);
+
+    const db = getDB();
+    const updateData = {
+      status: status,
+      updated_at: new Date()
+    };
+
+    if (admin_notes) {
+      updateData.admin_notes = admin_notes;
+    }
+
+    const result = await db.collection('procurement_requests').updateOne(
+      { _id: new ObjectId(requestId) },
+      { $set: updateData }
+    );
+
+    if (result.modifiedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Procurement request not found'
+      });
+    }
+
+    // Send notification to the requester
+    try {
+      const procurementRequest = await db.collection('procurement_requests').findOne({
+        _id: new ObjectId(requestId)
+      });
+
+      if (procurementRequest) {
+       await createComprehensiveNotification({
+  user_id: procurementRequest.requested_by,
+  title: 'Procurement Request Updated',
+  message: `Your equipment request for ${procurementRequest.item_name} has been ${status}`,
+  type: 'procurement_update',
+  related_ticket_id: procurementRequest.ticket_id,
+  related_request_id: requestId,
+  priority: 'high'
+});
+      }
+    } catch (notifError) {
+      console.error('Failed to send notification:', notifError);
+    }
+
+    console.log('✅ Procurement request status updated');
+
+    res.json({
+      success: true,
+      message: 'Procurement request status updated successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Update procurement status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update procurement request status: ' + error.message
+    });
+  }
+});
+
+
+
+// ========== BACKUP SYSTEM ==========
+
+// Create backup collection indexes
+async function createBackupIndexes() {
+  try {
+    await db.collection('user_backups').createIndex({ user_id: 1 });
+    await db.collection('user_backups').createIndex({ deleted_at: -1 });
+    await db.collection('ticket_backups').createIndex({ ticket_id: 1 });
+    await db.collection('ticket_backups').createIndex({ deleted_at: -1 });
+    await db.collection('system_backups').createIndex({ created_at: -1 });
+    console.log('✅ Backup indexes created');
+  } catch (error) {
+    console.error('❌ Backup index creation error:', error.message);
+  }
+}
+
+// Call this after database initialization
+// Add: await createBackupIndexes(); after initializeDatabase();
+
+// ========== BACKUP USER BEFORE DELETION ==========
+async function backupUserData(userId, deletedBy) {
+  try {
+    console.log(`💾 Creating backup for user ${userId}...`);
+    
+    // Get user data
+    const user = await db.collection('users').findOne({ user_id: parseInt(userId) });
+    if (!user) {
+      console.log(`❌ User ${userId} not found for backup`);
+      return null;
+    }
+    
+    // Get user's tickets
+    const userTickets = await db.collection('tickets').find({ user_id: parseInt(userId) }).toArray();
+    
+    // Get user's comments
+    const userComments = await db.collection('comments').find({ author_id: parseInt(userId) }).toArray();
+    
+    // Get user's ticket logs
+    const userLogs = await db.collection('ticket_logs').find({ changed_by: parseInt(userId) }).toArray();
+    
+    // Get user's notifications
+    const userNotifications = await db.collection('notifications').find({ user_id: parseInt(userId) }).toArray();
+    
+    // Get user's procurement requests
+    const userProcurement = await db.collection('procurement_requests').find({ requested_by: userId }).toArray();
+    
+    // Create backup document
+    const backupDoc = {
+      user_id: parseInt(userId),
+      user_data: user,
+      tickets: userTickets,
+      comments: userComments,
+      logs: userLogs,
+      notifications: userNotifications,
+      procurement_requests: userProcurement,
+      deleted_by: deletedBy,
+      deleted_by_name: 'Admin',
+      deleted_at: new Date(),
+      restored: false,
+      restored_at: null,
+      restored_by: null
+    };
+    
+    // Save backup
+    await db.collection('user_backups').insertOne(backupDoc);
+    
+    // Also backup each ticket individually
+    for (const ticket of userTickets) {
+      const ticketBackup = {
+        ticket_id: ticket.ticket_id,
+        ticket_data: ticket,
+        comments: userComments.filter(c => c.ticket_id === ticket.ticket_id),
+        logs: userLogs.filter(l => l.ticket_id === ticket.ticket_id),
+        user_id: parseInt(userId),
+        deleted_at: new Date(),
+        restored: false
+      };
+      await db.collection('ticket_backups').insertOne(ticketBackup);
+    }
+    
+    // Send backup email to admin
+    try {
+      const backupSummary = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #dc3545;">🗑️ Account Deleted - Backup Created</h2>
+          <p><strong>Deleted User:</strong> ${user.name} (${user.email})</p>
+          <p><strong>User ID:</strong> ${userId}</p>
+          <p><strong>Role:</strong> ${user.role}</p>
+          <p><strong>Deleted At:</strong> ${new Date().toLocaleString()}</p>
+          <hr>
+          <h3>📊 Backup Summary:</h3>
+          <ul>
+            <li><strong>Tickets:</strong> ${userTickets.length}</li>
+            <li><strong>Comments:</strong> ${userComments.length}</li>
+            <li><strong>Logs:</strong> ${userLogs.length}</li>
+            <li><strong>Notifications:</strong> ${userNotifications.length}</li>
+            <li><strong>Procurement Requests:</strong> ${userProcurement.length}</li>
+          </ul>
+          <hr>
+          <p style="color: #28a745;"><strong>✅ All data has been backed up and can be restored.</strong></p>
+          <p style="color: #888; font-size: 12px;">Backup ID: ${backupDoc._id}</p>
+        </div>
+      `;
+      
+      const mailOptions = {
+        from: '"IT Help Desk Backup" <hussenseid670@gmail.com>',
+        to: process.env.BACKUP_EMAIL || 'seidhussen0729@gmail.com',
+        subject: `💾 Backup Created: ${user.name} (${user.email}) - Account Deleted`,
+        html: backupSummary
+      };
+      
+      await transporter.sendMail(mailOptions);
+      console.log('✅ Backup email sent to admin');
+    } catch (emailError) {
+      console.error('❌ Backup email failed:', emailError.message);
+    }
+    
+    console.log(`✅ Backup created for user ${userId} with ${userTickets.length} tickets`);
+    return backupDoc._id;
+    
+  } catch (error) {
+    console.error('❌ Backup user data error:', error);
+    return null;
+  }
+}
+
+// ========== BACKUP TICKET BEFORE DELETION ==========
+async function backupTicketData(ticketId) {
+  try {
+    console.log(`💾 Creating backup for ticket ${ticketId}...`);
+    
+    const ticket = await db.collection('tickets').findOne({ ticket_id: parseInt(ticketId) });
+    if (!ticket) return null;
+    
+    const comments = await db.collection('comments').find({ ticket_id: parseInt(ticketId) }).toArray();
+    const logs = await db.collection('ticket_logs').find({ ticket_id: parseInt(ticketId) }).toArray();
+    
+    const backupDoc = {
+      ticket_id: parseInt(ticketId),
+      ticket_data: ticket,
+      comments: comments,
+      logs: logs,
+      deleted_at: new Date(),
+      restored: false
+    };
+    
+    await db.collection('ticket_backups').insertOne(backupDoc);
+    console.log(`✅ Backup created for ticket ${ticketId}`);
+    return backupDoc._id;
+    
+  } catch (error) {
+    console.error('❌ Backup ticket error:', error);
+    return null;
+  }
+}
+
+// ========== SYSTEM-WIDE BACKUP ==========
+async function createSystemBackup(createdBy) {
+  try {
+    console.log('💾 Creating system-wide backup...');
+    
+    const users = await db.collection('users').find({}, { projection: { password: 0 } }).toArray();
+    const tickets = await db.collection('tickets').find({}).toArray();
+    const teams = await db.collection('teams').find({}).toArray();
+    const comments = await db.collection('comments').find({}).toArray();
+    const logs = await db.collection('ticket_logs').find({}).toArray();
+    const notifications = await db.collection('notifications').find({}).toArray();
+    const procurement = await db.collection('procurement_requests').find({}).toArray();
+    
+    const backupDoc = {
+      backup_type: 'full_system',
+      created_by: createdBy,
+      created_at: new Date(),
+      data: {
+        users: users,
+        tickets: tickets,
+        teams: teams,
+        comments: comments,
+        logs: logs,
+        notifications: notifications,
+        procurement_requests: procurement
+      },
+      stats: {
+        users_count: users.length,
+        tickets_count: tickets.length,
+        teams_count: teams.length,
+        comments_count: comments.length,
+        logs_count: logs.length
+      }
+    };
+    
+    const result = await db.collection('system_backups').insertOne(backupDoc);
+    console.log(`✅ System backup created: ${result.insertedId}`);
+    
+    // Send backup email
+    try {
+      const mailOptions = {
+        from: '"IT Help Desk Backup" <hussenseid670@gmail.com>',
+        to: process.env.BACKUP_EMAIL || 'seidhussen0729@gmail.com',
+        subject: `💾 System Backup Created - ${new Date().toLocaleDateString()}`,
+        html: `
+          <h2>💾 System Backup Created</h2>
+          <p><strong>Date:</strong> ${new Date().toLocaleString()}</p>
+          <p><strong>Created By:</strong> ${createdBy}</p>
+          <hr>
+          <h3>Backup Statistics:</h3>
+          <ul>
+            <li>Users: ${users.length}</li>
+            <li>Tickets: ${tickets.length}</li>
+            <li>Teams: ${teams.length}</li>
+            <li>Comments: ${comments.length}</li>
+            <li>Logs: ${logs.length}</li>
+          </ul>
+          <p><strong>Backup ID:</strong> ${result.insertedId}</p>
+        `
+      };
+      await transporter.sendMail(mailOptions);
+    } catch (emailError) {
+      console.error('❌ Backup email failed:', emailError.message);
+    }
+    
+    return result.insertedId;
+    
+  } catch (error) {
+    console.error('❌ System backup error:', error);
+    return null;
+  }
+}
+
+// ========== BACKUP ROUTES ==========
+
+// Get all user backups (Admin only)
+app.get('/api/admin/backups/users', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
+  try {
+    const backups = await db.collection('user_backups')
+      .find({})
+      .sort({ deleted_at: -1 })
+      .toArray();
+    
+    // Remove password from user data in backups
+    const safeBackups = backups.map(backup => {
+      if (backup.user_data && backup.user_data.password) {
+        backup.user_data = { ...backup.user_data, password: '***HIDDEN***' };
+      }
+      return backup;
+    });
+    
+    res.json({
+      success: true,
+      backups: safeBackups
+    });
+  } catch (error) {
+    console.error('❌ Get user backups error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch backups' });
+  }
+});
+
+// Get single user backup
+app.get('/api/admin/backups/users/:backupId', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
+  try {
+    const { backupId } = req.params;
+    
+    const backup = await db.collection('user_backups').findOne({ 
+      _id: new ObjectId(backupId) 
+    });
+    
+    if (!backup) {
+      return res.status(404).json({ success: false, message: 'Backup not found' });
+    }
+    
+    // Hide password
+    if (backup.user_data && backup.user_data.password) {
+      backup.user_data = { ...backup.user_data, password: '***HIDDEN***' };
+    }
+    
+    res.json({
+      success: true,
+      backup: backup
+    });
+  } catch (error) {
+    console.error('❌ Get backup error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch backup' });
+  }
+});
+
+// Restore user from backup (Admin only)
+// Restore user from backup - FAST VERSION
+app.post('/api/admin/backups/users/:backupId/restore', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
+  try {
+    const { backupId } = req.params;
+    
+    console.log(`🔄 FAST RESTORE: ${backupId}`);
+    
+    const backup = await db.collection('user_backups').findOne({ _id: new ObjectId(backupId) });
+    
+    if (!backup) {
+      return res.status(404).json({ success: false, message: 'Backup not found' });
+    }
+    
+    if (backup.restored) {
+      return res.status(400).json({ success: false, message: 'This backup has already been restored' });
+    }
+    
+    // Check if user email already exists
+    const existingUser = await db.collection('users').findOne({ email: backup.user_data.email });
+    if (existingUser) {
+      return res.status(400).json({ success: false, message: `User with email ${backup.user_data.email} already exists.` });
+    }
+    
+    // 🔥 RESTORE ALL IN PARALLEL - SUPER FAST
+    const restorePromises = [db.collection('users').insertOne(backup.user_data)];
+    
+    if (backup.tickets && backup.tickets.length > 0) {
+      restorePromises.push(db.collection('tickets').insertMany(backup.tickets));
+    }
+    if (backup.comments && backup.comments.length > 0) {
+      restorePromises.push(db.collection('comments').insertMany(backup.comments));
+    }
+    if (backup.logs && backup.logs.length > 0) {
+      restorePromises.push(db.collection('ticket_logs').insertMany(backup.logs));
+    }
+    if (backup.notifications && backup.notifications.length > 0) {
+      restorePromises.push(db.collection('notifications').insertMany(backup.notifications));
+    }
+    if (backup.procurement_requests && backup.procurement_requests.length > 0) {
+      restorePromises.push(db.collection('procurement_requests').insertMany(backup.procurement_requests));
+    }
+    
+    await Promise.all(restorePromises);
+    
+    // Mark backup as restored
+    await db.collection('user_backups').updateOne(
+      { _id: new ObjectId(backupId) },
+      { $set: { restored: true, restored_at: new Date(), restored_by: req.user.id, restored_by_name: req.user.name } }
+    );
+    
+    console.log(`✅ User ${backup.user_data.name} restored in milliseconds`);
+    
+    // Send response immediately
+    res.json({
+      success: true,
+      message: `User ${backup.user_data.name} restored successfully!`
+    });
+    
+    // Send email in background (non-blocking)
+    try {
+      if (backup.user_data.email) {
+        transporter.sendMail({
+          from: '"IT Help Desk" <hussenseid670@gmail.com>',
+          to: backup.user_data.email,
+          subject: '✅ Account Restored - IT Help Desk',
+          html: `<h2>Account Restored</h2><p>Hello ${backup.user_data.name}, your account has been restored. You can now login.</p>`
+        }).catch(e => console.error('Restore email failed:', e.message));
+      }
+    } catch (e) { /* ignore */ }
+    
+  } catch (error) {
+    console.error('❌ Restore user error:', error);
+    res.status(500).json({ success: false, message: 'Failed to restore user: ' + error.message });
+  }
+});
+
+// Delete backup (Admin only)
+app.delete('/api/admin/backups/users/:backupId', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
+  try {
+    const { backupId } = req.params;
+    
+    const result = await db.collection('user_backups').deleteOne({ 
+      _id: new ObjectId(backupId) 
+    });
+    
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, message: 'Backup not found' });
+    }
+    
+    res.json({
+      success: true,
+      message: 'Backup deleted permanently'
+    });
+  } catch (error) {
+    console.error('❌ Delete backup error:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete backup' });
+  }
+});
+
+// Create manual system backup (Admin only)
+app.post('/api/admin/backups/system', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
+  try {
+    const backupId = await createSystemBackup(req.user.name);
+    
+    if (backupId) {
+      res.json({
+        success: true,
+        message: 'System backup created successfully',
+        backup_id: backupId
+      });
+    } else {
+      res.status(500).json({ success: false, message: 'Failed to create backup' });
     }
   } catch (error) {
-    console.error('Background queue processing error:', error);
+    console.error('❌ System backup error:', error);
+    res.status(500).json({ success: false, message: 'Failed to create backup' });
   }
-}, 20 * 1000); // 20 seconds
+});
+
+// Get system backups list
+app.get('/api/admin/backups/system', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
+  try {
+    const backups = await db.collection('system_backups')
+      .find({}, { projection: { data: 0 } }) // Exclude large data
+      .sort({ created_at: -1 })
+      .limit(20)
+      .toArray();
+    
+    res.json({
+      success: true,
+      backups: backups
+    });
+  } catch (error) {
+    console.error('❌ Get system backups error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch backups' });
+  }
+});
+
+// Get ticket backups
+app.get('/api/admin/backups/tickets', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
+  try {
+    const backups = await db.collection('ticket_backups')
+      .find({})
+      .sort({ deleted_at: -1 })
+      .limit(50)
+      .toArray();
+    
+    res.json({
+      success: true,
+      backups: backups
+    });
+  } catch (error) {
+    console.error('❌ Get ticket backups error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch backups' });
+  }
+});
+
+// Restore ticket from backup
+app.post('/api/admin/backups/tickets/:backupId/restore', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
+  try {
+    const { backupId } = req.params;
+    
+    const backup = await db.collection('ticket_backups').findOne({ 
+      _id: new ObjectId(backupId) 
+    });
+    
+    if (!backup) {
+      return res.status(404).json({ success: false, message: 'Backup not found' });
+    }
+    
+    // Check if ticket already exists
+    const existingTicket = await db.collection('tickets').findOne({ 
+      ticket_id: backup.ticket_id 
+    });
+    
+    if (existingTicket) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Ticket #${backup.ticket_id} already exists` 
+      });
+    }
+    
+    // Restore ticket
+    await db.collection('tickets').insertOne(backup.ticket_data);
+    
+    // Restore comments
+    if (backup.comments && backup.comments.length > 0) {
+      await db.collection('comments').insertMany(backup.comments);
+    }
+    
+    // Restore logs
+    if (backup.logs && backup.logs.length > 0) {
+      await db.collection('ticket_logs').insertMany(backup.logs);
+    }
+    
+    // Mark as restored
+    await db.collection('ticket_backups').updateOne(
+      { _id: new ObjectId(backupId) },
+      { $set: { restored: true, restored_at: new Date() } }
+    );
+    
+    res.json({
+      success: true,
+      message: `Ticket #${backup.ticket_id} restored successfully`
+    });
+    
+  } catch (error) {
+    console.error('❌ Restore ticket error:', error);
+    res.status(500).json({ success: false, message: 'Failed to restore ticket' });
+  }
+});
+
+
+
+// ========== COMPREHENSIVE NOTIFICATION SYSTEM ==========
+
+// Notification for ticket assignment
+async function createTicketAssignmentNotification(ticketId, assignedOfficerId) {
+  const ticket = await db.collection('tickets').findOne({ ticket_id: parseInt(ticketId) });
+  if (!ticket) return;
+
+  // Notification for the assigned officer
+  await createComprehensiveNotification({
+  user_id: officer.user_id,
+  title: 'New Ticket Assigned from Queue',
+  message: `A ${ticket.issue_type} ticket has been automatically assigned to you from the queue: "${ticket.description.substring(0, 100)}..."`,
+  type: 'ticket_assigned',
+  related_ticket_id: ticketId,
+  priority: 'high'
+});
+
+await createComprehensiveNotification({
+  user_id: ticket.user_id,
+  title: 'Ticket Assigned',
+  message: `Your ticket has been assigned to ${officer.name} and is now in progress.`,
+  type: 'ticket_updated',
+  related_ticket_id: ticketId,
+  priority: 'medium'
+});
+}
+
+// Notification for ticket status changes
+async function createTicketStatusNotification(ticketId, newStatus, changedByName) {
+  const ticket = await db.collection('tickets').findOne({ ticket_id: parseInt(ticketId) });
+  if (!ticket) return;
+
+  const statusMessages = {
+    'In Progress': `Your ticket #${ticketId} is now being worked on by ${changedByName}.`,
+    'Resolved': `Your ticket #${ticketId} has been resolved by ${changedByName}. Please review and close if satisfied.`,
+    'Closed': `Your ticket #${ticketId} has been closed.`,
+    'Queued': `Your ticket #${ticketId} has been placed in queue due to high workload.`
+  };
+
+  if (statusMessages[newStatus]) {
+    await createNotification({
+      user_id: ticket.user_id,
+      title: `Ticket ${newStatus}`,
+      message: statusMessages[newStatus],
+      type: 'ticket_status',
+      related_ticket_id: ticketId
+    });
+  }
+}
+
+// Notification for comments
+async function createCommentNotification(ticketId, commenterId, commenterName, commentText) {
+  const ticket = await db.collection('tickets').findOne({ ticket_id: parseInt(ticketId) });
+  if (!ticket) return;
+
+  // Notify ticket owner (if commenter is not the owner)
+  if (ticket.user_id !== commenterId) {
+    await createNotification({
+      user_id: ticket.user_id,
+      title: 'New Comment on Your Ticket',
+      message: `${commenterName} commented on ticket #${ticketId}: "${commentText.substring(0, 100)}..."`,
+      type: 'comment_added',
+      related_ticket_id: ticketId
+    });
+  }
+
+  // Notify assigned officer (if different from commenter and ticket owner)
+  if (ticket.assigned_to && ticket.assigned_to !== commenterId && ticket.assigned_to !== ticket.user_id) {
+    await createNotification({
+      user_id: ticket.assigned_to,
+      title: 'New Comment on Assigned Ticket',
+      message: `${commenterName} commented on ticket #${ticketId}: "${commentText.substring(0, 100)}..."`,
+      type: 'comment_added',
+      related_ticket_id: ticketId
+    });
+  }
+}
 
 
 
@@ -4421,6 +8225,677 @@ setInterval(async () => {
 
 
 
+
+// ========== FIXED PROCUREMENT NOTIFICATION FUNCTIONS ==========
+
+// FIXED: Enhanced procurement notification function
+async function createProcurementNotification(requestId, action, actionBy) {
+  try {
+    console.log(`🔔 Creating procurement notification for request: ${requestId}, action: ${action}`);
+    
+    const request = await db.collection('procurement_requests').findOne({ _id: new ObjectId(requestId) });
+    if (!request) {
+      console.log('❌ Procurement request not found for notification');
+      return;
+    }
+
+    const actionConfig = {
+      'created': {
+        title: '🛒 New Equipment Request',
+        message: `New equipment request submitted for "${request.item_name}" in ticket #${request.ticket_id}`,
+        priority: 'high'
+      },
+      'approved': {
+        title: '✅ Equipment Request Approved',
+        message: `Your equipment request for "${request.item_name}" has been approved by ${actionBy}`,
+        priority: 'high'
+      },
+      'rejected': {
+        title: '❌ Equipment Request Rejected',
+        message: `Your equipment request for "${request.item_name}" has been rejected by ${actionBy}`,
+        priority: 'high'
+      },
+      'ordered': {
+        title: '📦 Equipment Ordered',
+        message: `Your equipment request for "${request.item_name}" has been ordered`,
+        priority: 'medium'
+      },
+      'delivered': {
+        title: '🎁 Equipment Delivered',
+        message: `Your equipment request for "${request.item_name}" has been delivered`,
+        priority: 'medium'
+      },
+      'cancelled': {
+        title: '🚫 Request Cancelled',
+        message: `Your equipment request for "${request.item_name}" has been cancelled by ${actionBy}`,
+        priority: 'high'
+      }
+    };
+
+    const config = actionConfig[action];
+    if (config) {
+      // Notify the requester
+      await createComprehensiveNotification({
+        user_id: request.requested_by,
+        title: config.title,
+        message: config.message,
+        type: 'procurement',
+        related_ticket_id: request.ticket_id,
+        related_request_id: requestId,
+        priority: config.priority
+      });
+
+      // Notify all senior officers in the team about new procurement requests
+      if (action === 'created') {
+        const ticket = await db.collection('tickets').findOne({ ticket_id: parseInt(request.ticket_id) });
+        if (ticket && ticket.team_id) {
+          const teamOfficers = await db.collection('users').find({
+            team_id: ticket.team_id,
+            role: 'senior',
+            is_active: true
+          }).toArray();
+
+          for (const officer of teamOfficers) {
+            if (officer.user_id !== request.requested_by) {
+              await createComprehensiveNotification({
+                user_id: officer.user_id,
+                title: '🛒 New Equipment Request',
+                message: `New equipment request for "${request.item_name}" in ticket #${request.ticket_id}`,
+                type: 'procurement',
+                related_ticket_id: request.ticket_id,
+                related_request_id: requestId,
+                priority: 'medium'
+              });
+            }
+          }
+        }
+      }
+
+      // Notify assigned officer about procurement updates
+      const ticket = await db.collection('tickets').findOne({ ticket_id: parseInt(request.ticket_id) });
+      if (ticket && ticket.assigned_to && ticket.assigned_to !== request.requested_by) {
+        await createComprehensiveNotification({
+          user_id: ticket.assigned_to,
+          title: config.title,
+          message: `Equipment request for ticket #${request.ticket_id}: ${config.message}`,
+          type: 'procurement',
+          related_ticket_id: request.ticket_id,
+          related_request_id: requestId,
+          priority: 'medium'
+        });
+      }
+      
+      console.log(`✅ Procurement notification sent for action: ${action}`);
+    }
+  } catch (error) {
+    console.error('❌ Procurement notification error:', error);
+  }
+}
+
+// FIXED: Enhanced procurement message notification
+async function createProcurementMessageNotification(requestId, senderId, senderName, message) {
+  try {
+    console.log(`🔔 Creating procurement message notification for request: ${requestId}`);
+    
+    const request = await db.collection('procurement_requests').findOne({ _id: new ObjectId(requestId) });
+    if (!request) {
+      console.log('❌ Procurement request not found for notification');
+      return;
+    }
+
+    const usersToNotify = new Set();
+
+    // Notify the requester (if sender is not the requester)
+    if (request.requested_by !== senderId) {
+      usersToNotify.add(request.requested_by);
+      console.log(`🔔 Will notify requester: ${request.requested_by}`);
+    }
+
+    // Notify assigned officer about procurement messages
+    const ticket = await db.collection('tickets').findOne({ ticket_id: parseInt(request.ticket_id) });
+    if (ticket && ticket.assigned_to && ticket.assigned_to !== senderId) {
+      usersToNotify.add(ticket.assigned_to);
+      console.log(`🔔 Will notify assigned officer: ${ticket.assigned_to}`);
+    }
+
+    // Notify all users who sent messages in this procurement request
+    if (request.messages && request.messages.length > 0) {
+      request.messages.forEach(msg => {
+        if (msg.sender_id && msg.sender_id !== senderId) {
+          usersToNotify.add(msg.sender_id);
+          console.log(`🔔 Will notify message participant: ${msg.sender_id}`);
+        }
+      });
+    }
+
+    console.log(`🔔 Total users to notify: ${usersToNotify.size}`);
+
+    // Create notifications for all relevant users
+    for (const userId of usersToNotify) {
+      await createComprehensiveNotification({
+        user_id: userId,
+        title: '💬 Equipment Message',
+        message: `${senderName} sent a message about "${request.item_name}": "${message.substring(0, 100)}..."`,
+        type: 'procurement_message',
+        related_ticket_id: request.ticket_id,
+        related_request_id: requestId,
+        priority: 'medium'
+      });
+    }
+
+    console.log(`✅ Procurement message notifications completed for request: ${requestId}`);
+
+  } catch (error) {
+    console.error('❌ Procurement message notification error:', error);
+  }
+}
+
+
+
+
+// Test email endpoint
+app.post('/api/test-email', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    const testHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #007bff;">Test Email from IT Help Desk</h2>
+        <p>This is a test email to verify email notifications are working.</p>
+        <p>If you received this, email notifications are configured correctly!</p>
+        <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+        <p style="color: #666; font-size: 12px;">
+          Ethiopian Statistical Service IT Help Desk<br>
+          Test Email - ${new Date().toISOString()}
+        </p>
+      </div>
+    `;
+
+    const result = await sendEmailNotification(email, 'Test Email - IT Help Desk', testHtml);
+    
+    if (result) {
+      res.json({ success: true, message: 'Test email sent successfully!' });
+    } else {
+      res.status(500).json({ success: false, message: 'Failed to send test email' });
+    }
+  } catch (error) {
+    console.error('Test email error:', error);
+    res.status(500).json({ success: false, message: 'Email test failed: ' + error.message });
+  }
+});
+
+
+
+
+
+
+
+
+// ========== EMAIL NOTIFICATION FUNCTIONS ==========
+
+// Enhanced email notification function
+async function sendEmailNotification(userId, title, message) {
+  try {
+    console.log(`📧 Attempting to send email to user ${userId}`);
+    
+    // Get user email from database
+    const user = await db.collection('users').findOne({ user_id: userId });
+    if (!user || !user.email) {
+      console.log(`❌ User ${userId} not found or no email address`);
+      return false;
+    }
+
+    console.log(`📧 Sending email to: ${user.email}`);
+
+    const mailOptions = {
+      from: '"IT Help Desk" <hussenseid670@gmail.com>',
+      to: user.email,
+      subject: `IT Help Desk: ${title}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+          <div style="background: #007bff; padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
+            <h1 style="color: white; margin: 0;">IT Help Desk Notification</h1>
+          </div>
+          <div style="padding: 20px;">
+            <h2 style="color: #333;">${title}</h2>
+            <p style="font-size: 16px; color: #555; line-height: 1.6;">${message}</p>
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <p style="margin: 0; color: #666; font-size: 14px;">
+                <strong>Time:</strong> ${new Date().toLocaleString()}<br>
+                <strong>User:</strong> ${user.name}
+              </p>
+            </div>
+            <p style="color: #888; font-size: 14px;">
+              This is an automated notification from the IT Help Desk System.
+            </p>
+          </div>
+          <div style="background-color: #f8f9fa; padding: 15px; border-radius: 0 0 10px 10px; text-align: center;">
+            <p style="margin: 0; color: #666; font-size: 12px;">
+              Ethiopian Statistical Service IT Help Desk
+            </p>
+          </div>
+        </div>
+      `
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log(`✅ Email notification sent to: ${user.email}`);
+    return true;
+  } catch (error) {
+    console.error('❌ Email notification failed:', error.message);
+    return false;
+  }
+}
+
+// Enhanced notification function with email for ALL events
+async function createComprehensiveNotification(notificationData) {
+  if (!isDatabaseConnected) {
+    console.log('❌ Database not connected for notification creation');
+    return false;
+  }
+
+  try {
+    const notificationId = await getNextSequence('notificationId');
+    
+    const notificationDoc = {
+      _id: notificationId,
+      notification_id: notificationId,
+      user_id: notificationData.user_id,
+      title: notificationData.title,
+      message: notificationData.message,
+      type: notificationData.type || 'system',
+      related_ticket_id: notificationData.related_ticket_id || null,
+      related_request_id: notificationData.related_request_id || null,
+      priority: notificationData.priority || 'medium',
+      read: false,
+      created_at: new Date(),
+      updated_at: new Date()
+    };
+
+    await db.collection('notifications').insertOne(notificationDoc);
+    console.log(`✅ Database notification created: ${notificationData.title} for user ${notificationData.user_id}`);
+
+    // 🔥 SEND EMAIL NOTIFICATION FOR ALL EVENTS
+    try {
+      await sendEmailNotification(notificationData.user_id, notificationData.title, notificationData.message);
+      console.log(`📧 Email notification sent for: ${notificationData.title}`);
+    } catch (emailError) {
+      console.error('❌ Email notification failed (non-critical):', emailError.message);
+      // Continue even if email fails
+    }
+
+    return true;
+  } catch (error) {
+    console.error('❌ Create notification error:', error);
+    return false;
+  }
+}
+
+
+// Test email notification endpoint
+app.post('/api/test-email-notification', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    const { userId, title, message } = req.body;
+    
+    console.log('🧪 Testing email notification for user:', userId);
+    
+    const success = await sendEmailNotification(userId, title, message);
+    
+    if (success) {
+      res.json({ 
+        success: true, 
+        message: 'Test email notification sent successfully!' 
+      });
+    } else {
+      res.status(500).json({ 
+        success: false, 
+        message: 'Failed to send test email notification' 
+      });
+    }
+  } catch (error) {
+    console.error('Test email notification error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Email test failed: ' + error.message 
+    });
+  }
+});
+
+// Simple email test
+app.post('/api/test-email', async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    const mailOptions = {
+      from: '"IT Help Desk Test" <hussenseid670@gmail.com>',
+      to: email,
+      subject: 'Test Email - IT Help Desk',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #007bff;">✅ Test Email Successful!</h2>
+          <p>This is a test email from your IT Help Desk system.</p>
+          <p>If you received this, email notifications are working correctly!</p>
+          <p><strong>Time:</strong> ${new Date().toString()}</p>
+        </div>
+      `
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log(`✅ Test email sent to: ${email}`);
+    
+    res.json({ success: true, message: 'Test email sent successfully!' });
+  } catch (error) {
+    console.error('Test email error:', error);
+    res.status(500).json({ success: false, message: 'Failed to send test email: ' + error.message });
+  }
+});
+
+
+
+// ========== ADMIN NOTIFICATION FUNCTION ==========
+// This function sends ALL notifications to the admin email
+async function notifyAdmin(title, message, relatedData = {}) {
+  try {
+    const adminEmail = 'seidhussen0729@gmail.com';
+    
+    const mailOptions = {
+      from: '"IT Help Desk System" <hussenseid670@gmail.com>',
+      to: adminEmail,
+      subject: `🔔 Admin Alert: ${title}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+          <div style="background: #dc3545; padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
+            <h1 style="color: white; margin: 0;">🔔 Admin Notification</h1>
+          </div>
+          <div style="padding: 20px;">
+            <h2 style="color: #333;">${title}</h2>
+            <p style="font-size: 16px; color: #555; line-height: 1.6;">${message}</p>
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <p style="margin: 0; color: #666; font-size: 14px;">
+                <strong>Time:</strong> ${new Date().toLocaleString()}<br>
+                ${relatedData.ticketId ? `<strong>Ticket ID:</strong> #${relatedData.ticketId}<br>` : ''}
+                ${relatedData.userName ? `<strong>User:</strong> ${relatedData.userName}<br>` : ''}
+                ${relatedData.userEmail ? `<strong>Email:</strong> ${relatedData.userEmail}<br>` : ''}
+                ${relatedData.action ? `<strong>Action:</strong> ${relatedData.action}<br>` : ''}
+              </p>
+            </div>
+            <p style="color: #888; font-size: 14px;">
+              This is an automated admin notification from the IT Help Desk System.
+            </p>
+          </div>
+          <div style="background-color: #f8f9fa; padding: 15px; border-radius: 0 0 10px 10px; text-align: center;">
+            <p style="margin: 0; color: #666; font-size: 12px;">
+              Ethiopian Statistical Service IT Help Desk - Admin Alert
+            </p>
+          </div>
+        </div>
+      `
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log(`✅ Admin notification sent to: ${adminEmail}`);
+    return true;
+  } catch (error) {
+    console.error('❌ Admin notification failed:', error.message);
+    return false;
+  }
+}
+
+
+
+// ========== EMERGENCY FIX: Reset corrupted counters ==========
+app.post('/api/admin/fix-counters', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
+  try {
+    console.log('🔄 EMERGENCY: Fixing corrupted counters...');
+    
+    // Delete and recreate counters
+    await db.collection('counters').deleteMany({});
+    
+    // Get current max values
+    const maxUserId = await db.collection('users').find().sort({ user_id: -1 }).limit(1).toArray();
+    const maxTicketId = await db.collection('tickets').find().sort({ ticket_id: -1 }).limit(1).toArray();
+    const maxNotificationId = await db.collection('notifications').find().sort({ notification_id: -1 }).limit(1).toArray();
+    
+    // Reinitialize counters with proper values
+    await db.collection('counters').insertMany([
+      { 
+        _id: 'userId', 
+        sequence_value: maxUserId.length > 0 ? maxUserId[0].user_id + 1 : 3000 
+      },
+      { 
+        _id: 'ticketId', 
+        sequence_value: maxTicketId.length > 0 ? maxTicketId[0].ticket_id + 1 : 10000 
+      },
+      { 
+        _id: 'notificationId', 
+        sequence_value: maxNotificationId.length > 0 ? maxNotificationId[0].notification_id + 1 : 1 
+      },
+      { _id: 'teamId', sequence_value: 10 },
+      { _id: 'commentId', sequence_value: 1 },
+      { _id: 'logId', sequence_value: 1 }
+    ]);
+    
+    console.log('✅ Counters reset successfully');
+    
+    res.json({
+      success: true,
+      message: 'Counters reset successfully. Server should work normally now.',
+      new_values: {
+        userId: maxUserId.length > 0 ? maxUserId[0].user_id + 1 : 3000,
+        ticketId: maxTicketId.length > 0 ? maxTicketId[0].ticket_id + 1 : 10000,
+        notificationId: maxNotificationId.length > 0 ? maxNotificationId[0].notification_id + 1 : 1
+      }
+    });
+  } catch (error) {
+    console.error('❌ Counter fix error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ========== ENHANCED getNextSequence Function ==========
+async function getNextSequence(sequenceName) {
+  if (!isDatabaseConnected) {
+    console.error('Database not connected for sequence');
+    return Math.floor(Math.random() * 10000) + 1;
+  }
+
+  try {
+    // First, check if counter exists
+    const existingCounter = await db.collection('counters').findOne({ _id: sequenceName });
+    
+    if (!existingCounter) {
+      // Initialize the counter if it doesn't exist
+      const initialValue = sequenceName === 'userId' ? 3000 : 
+                          sequenceName === 'ticketId' ? 10000 : 1;
+      
+      await db.collection('counters').insertOne({
+        _id: sequenceName,
+        sequence_value: initialValue
+      });
+      return initialValue;
+    }
+    
+    // Use findOneAndUpdate for atomic operation
+    const result = await db.collection('counters').findOneAndUpdate(
+      { _id: sequenceName },
+      { $inc: { sequence_value: 1 } },
+      { 
+        returnDocument: 'after',
+        upsert: true
+      }
+    );
+    
+    if (result && result.value) {
+      return result.value.sequence_value;
+    } else {
+      // Fallback: manually increment
+      const current = await db.collection('counters').findOne({ _id: sequenceName });
+      const newValue = (current?.sequence_value || 0) + 1;
+      await db.collection('counters').updateOne(
+        { _id: sequenceName },
+        { $set: { sequence_value: newValue } },
+        { upsert: true }
+      );
+      return newValue;
+    }
+  } catch (error) {
+    console.error('Sequence error for', sequenceName, ':', error);
+    // Emergency fallback - generate random ID
+    return Math.floor(Math.random() * 100000) + 1000;
+  }
+}
+
+// ========== FIXED NOTIFICATION ROUTES ==========
+
+// Get user notifications - FIXED VERSION
+app.get('/api/notifications', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    const { limit = 50, unread_only = false } = req.query;
+    
+    console.log(`🔔 Fetching notifications for user ${req.user.id}`);
+    
+    let query = { user_id: req.user.id };
+    if (unread_only === 'true') {
+      query.read = false;
+    }
+    
+    const notifications = await db.collection('notifications')
+      .find(query)
+      .sort({ created_at: -1 })
+      .limit(parseInt(limit))
+      .toArray();
+
+    // Get unread count
+    const unreadCount = await db.collection('notifications').countDocuments({
+      user_id: req.user.id,
+      read: false
+    });
+
+    console.log(`✅ Found ${notifications.length} notifications for user ${req.user.id} (${unreadCount} unread)`);
+    
+    res.json({
+      success: true,
+      notifications,
+      unread_count: unreadCount
+    });
+  } catch (error) {
+    console.error('❌ Get notifications error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch notifications: ' + error.message 
+    });
+  }
+});
+
+// Mark notification as read - FIXED VERSION
+app.put('/api/notifications/:notificationId/read', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+    
+    console.log(`📖 Marking notification ${notificationId} as read for user ${req.user.id}`);
+    
+    const result = await db.collection('notifications').updateOne(
+      { 
+        _id: new ObjectId(notificationId),
+        user_id: req.user.id 
+      },
+      { 
+        $set: { 
+          read: true,
+          updated_at: new Date()
+        } 
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Notification not found or access denied' 
+      });
+    }
+
+    console.log(`✅ Notification ${notificationId} marked as read`);
+    
+    res.json({
+      success: true,
+      message: 'Notification marked as read'
+    });
+  } catch (error) {
+    console.error('❌ Mark notification as read error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to mark notification as read: ' + error.message 
+    });
+  }
+});
+
+// Mark all notifications as read - FIXED VERSION
+app.put('/api/notifications/mark-all-read', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    console.log(`📖 Marking all notifications as read for user ${req.user.id}`);
+    
+    const result = await db.collection('notifications').updateMany(
+      { 
+        user_id: req.user.id,
+        read: false
+      },
+      { 
+        $set: { 
+          read: true,
+          updated_at: new Date()
+        } 
+      }
+    );
+
+    console.log(`✅ ${result.modifiedCount} notifications marked as read`);
+    
+    res.json({
+      success: true,
+      message: `Marked ${result.modifiedCount} notifications as read`,
+      marked_count: result.modifiedCount
+    });
+  } catch (error) {
+    console.error('❌ Mark all notifications as read error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to mark notifications as read: ' + error.message 
+    });
+  }
+});
+
+// Delete notification - FIXED VERSION
+app.delete('/api/notifications/:notificationId', authenticateToken, requireDatabase, async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+    
+    console.log(`🗑️ Deleting notification ${notificationId} for user ${req.user.id}`);
+    
+    const result = await db.collection('notifications').deleteOne({
+      _id: new ObjectId(notificationId),
+      user_id: req.user.id
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Notification not found or access denied' 
+      });
+    }
+
+    console.log(`✅ Notification ${notificationId} deleted`);
+    
+    res.json({
+      success: true,
+      message: 'Notification deleted successfully'
+    });
+  } catch (error) {
+    console.error('❌ Delete notification error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to delete notification: ' + error.message 
+    });
+  }
+});
 
 
 
@@ -4435,8 +8910,28 @@ async function startServer() {
     
     // Initialize database if connected
     if (isDatabaseConnected) {
-      await initializeDatabase();
-    } else {
+  await initializeDatabase();
+  
+  // Create backup collections
+  try {
+    const collections = await db.listCollections().toArray();
+    const collectionNames = collections.map(col => col.name);
+    if (!collectionNames.includes('user_backups')) {
+      await db.createCollection('user_backups');
+      console.log('✅ Created user_backups collection');
+    }
+    if (!collectionNames.includes('ticket_backups')) {
+      await db.createCollection('ticket_backups');
+      console.log('✅ Created ticket_backups collection');
+    }
+    if (!collectionNames.includes('system_backups')) {
+      await db.createCollection('system_backups');
+      console.log('✅ Created system_backups collection');
+    }
+  } catch (err) {
+    console.error('❌ Backup collection error:', err.message);
+  }
+} else {
       console.log('⚠️  Server starting without database connection');
     }
     
@@ -4446,6 +8941,7 @@ async function startServer() {
       console.log(`📍 Network: http://0.0.0.0:${PORT}`);
       console.log(`📊 Test endpoint: http://localhost:${PORT}/api/test`);
       console.log(`❤️ Health check: http://localhost:${PORT}/api/health`);
+      console.log(`🔔 Notification endpoint: http://localhost:${PORT}/api/notifications`);
       console.log(`🤖 AI Categories: Hardware, Software, Network, Security, Account, Database, Configuration, Maintenance, Other`);
       console.log(`🎯 ENHANCED QUEUE SYSTEM: Tickets automatically queue when officers have ≥3 tickets`);
       console.log(`🔄 Auto-processing queue every 20 seconds`);
