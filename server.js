@@ -1,7 +1,7 @@
 const express = require('express');
 const { MongoClient, ObjectId } = require('mongodb');
 const cors = require('cors');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const path = require('path');
