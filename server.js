@@ -275,7 +275,7 @@ const requireDatabase = (req, res, next) => {
 // ========== FIXED CORS CONFIGURATION ==========
 // Clean CORS setup - remove all duplicate configurations
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+  origin: ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://it-helpdesk-frontend.vercel.app'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
