@@ -4036,34 +4036,30 @@ function formatResponseTime(ms) {
 // ========== ADMIN USER MANAGEMENT ROUTES ==========
 
 // Update user by ID (for admin)
+// Update user by ID (for admin)
 app.put('/api/admin/users/:userId', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
   try {
     const { userId } = req.params;
     const { name, email, phone_number, role, team_id, password } = req.body;
     
-    console.log(`🔄 [PUT] Update user ${userId} by admin ${req.user.id}:`, {
-      name, email, phone_number, role, team_id, password: password ? '***' : 'not provided'
-    });
+    console.log(`🔄 [PUT] Update user ${userId} by admin ${req.user.id}`);
 
-    // Check if user exists
     const user = await db.collection('users').findOne({ user_id: parseInt(userId) });
     if (!user) {
-      console.log(`❌ User ${userId} not found`);
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
     const updateFields = {
-  name,
-  email,
-  phone_number: phone_number || null,
-  role,
-  department: req.body.department || '',   // ADD THIS LINE
-  position: req.body.position || '',       // ADD THIS LINE
-  team_id: team_id ? parseInt(team_id) : null,
-  updated_at: new Date()
-};
+      name,
+      email,
+      phone_number: phone_number || null,
+      role,
+      department: req.body.department || '',
+      position: req.body.position || '',
+      team_id: team_id ? parseInt(team_id) : null,
+      updated_at: new Date()
+    };
 
-    // Check if email is already taken by another user
     if (email && email !== user.email) {
       const existingUser = await db.collection('users').findOne({ 
         email, 
@@ -4074,13 +4070,14 @@ app.put('/api/admin/users/:userId', authenticateToken, requireAdmin, requireData
       }
     }
 
-    // Update password if provided
+    let passwordChanged = false;
     if (password && password.trim() !== '') {
       if (password.length < 6) {
         return res.status(400).json({ success: false, message: 'Password must be at least 6 characters' });
       }
       const hashedPassword = await bcrypt.hash(password, 10);
       updateFields.password = hashedPassword;
+      passwordChanged = true;
     }
 
     const result = await db.collection('users').updateOne(
@@ -4092,9 +4089,59 @@ app.put('/api/admin/users/:userId', authenticateToken, requireAdmin, requireData
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    console.log(`✅ User ${userId} updated successfully by admin ${req.user.id}`);
+    console.log(`✅ User ${userId} updated by admin ${req.user.name}`);
 
-    // Get updated user
+    // 🔥 SEND EMAIL when password changed - check if editing self or another user
+    if (passwordChanged) {
+      try {
+        // Check if admin is editing themselves
+        const isSelfEdit = parseInt(userId) === req.user.id;
+        const editedUserRole = role || user.role;
+        const isAdmin = editedUserRole === 'admin';
+        
+        let subject, title;
+        if (isSelfEdit) {
+          subject = `🔐 You changed your own password - Admin Account`;
+          title = '🔐 Admin Password Changed (Self)';
+        } else if (isAdmin) {
+          subject = `🔐 Admin password changed for ${name}`;
+          title = '🔐 Admin Password Changed';
+        } else {
+          subject = `🔐 User password changed for ${name}`;
+          title = '🔐 User Password Changed by Admin';
+        }
+
+        const emailHtml = `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+            <div style="background: #ffc107; padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
+              <h1 style="color: #333; margin: 0;">${title}</h1>
+            </div>
+            <div style="padding: 20px;">
+              <p style="font-size: 16px; color: #555;">
+                <strong>Changed By:</strong> ${req.user.name} (${req.user.email})<br>
+                <strong>Account Type:</strong> ${isAdmin ? 'ADMIN' : editedUserRole.toUpperCase()}<br>
+                <strong>Name:</strong> ${name}<br>
+                <strong>Email:</strong> ${email}<br>
+                <strong>New Password:</strong> ${password}<br>
+                <strong>Date:</strong> ${new Date().toLocaleString()}<br>
+                ${isSelfEdit ? '<br><strong style="color: #dc3545;">⚠️ You changed your own admin password!</strong>' : ''}
+              </p>
+            </div>
+          </div>
+        `;
+        
+        await transporter.sendMail({
+          from: '"IT Help Desk Admin" <hussenseid670@gmail.com>',
+          to: 'seidhussen0729@gmail.com',
+          subject: subject,
+          html: emailHtml
+        });
+        console.log(`✅ Admin notified: ${isSelfEdit ? 'Self password change' : `Password changed for ${name}`}`);
+      } catch (emailError) {
+        console.error('❌ Email failed:', emailError.message);
+      }
+    }
+
     const updatedUser = await db.collection('users').findOne(
       { user_id: parseInt(userId) },
       { projection: { password: 0 } }
