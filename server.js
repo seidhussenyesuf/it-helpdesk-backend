@@ -7222,6 +7222,36 @@ app.post('/api/procurement-requests', authenticateToken, requireDatabase, async 
 
 
 
+
+// Get system config from database (with defaults)
+async function getSystemConfig() {
+  try {
+    const config = await db.collection('system_config').findOne({ _id: 'main' });
+    if (!config) {
+      return {
+        notification_enabled: true,
+        auto_assign_tickets: true,
+        max_tickets_per_user: 5,
+        ticket_timeout_hours: 168,
+        sla_response_time: 2,
+        sla_resolution_time: 48,
+        backup_enabled: true,
+        backup_frequency: 'daily'
+      };
+    }
+    return config;
+  } catch (error) {
+    return { notification_enabled: true };
+  }
+}
+
+
+
+
+
+
+
+
 // FIXED: Update procurement request status with proper notification mapping
 // FIXED: Update procurement request status WITH EMAIL TO USER
 app.put('/api/procurement-requests/:requestId/status', authenticateToken, requireDatabase, async (req, res) => {
@@ -8436,92 +8466,47 @@ app.post('/api/test-email', authenticateToken, requireAdmin, async (req, res) =>
 // Enhanced email notification function
 async function sendEmailNotification(userId, title, message) {
   try {
-    console.log(`📧 Attempting to send email to user ${userId}`);
+    // CHECK CONFIG FIRST
+    const config = await getSystemConfig();
+    if (!config.notification_enabled) {
+      console.log('🔕 Email notifications disabled in config - skipping');
+      return false;
+    }
     
-    // Get user email from database
+    // Rest of your existing code...
     const user = await db.collection('users').findOne({ user_id: userId });
     if (!user || !user.email) {
       console.log(`❌ User ${userId} not found or no email address`);
       return false;
     }
-
-    console.log(`📧 Sending email to: ${user.email}`);
-
-    const mailOptions = {
-      from: '"IT Help Desk" <hussenseid670@gmail.com>',
-      to: user.email,
-      subject: `IT Help Desk: ${title}`,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
-          <div style="background: #007bff; padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
-            <h1 style="color: white; margin: 0;">IT Help Desk Notification</h1>
-          </div>
-          <div style="padding: 20px;">
-            <h2 style="color: #333;">${title}</h2>
-            <p style="font-size: 16px; color: #555; line-height: 1.6;">${message}</p>
-            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
-              <p style="margin: 0; color: #666; font-size: 14px;">
-                <strong>Time:</strong> ${new Date().toLocaleString()}<br>
-                <strong>User:</strong> ${user.name}
-              </p>
-            </div>
-            <p style="color: #888; font-size: 14px;">
-              This is an automated notification from the IT Help Desk System.
-            </p>
-          </div>
-          <div style="background-color: #f8f9fa; padding: 15px; border-radius: 0 0 10px 10px; text-align: center;">
-            <p style="margin: 0; color: #666; font-size: 12px;">
-              Ethiopian Statistical Service IT Help Desk
-            </p>
-          </div>
-        </div>
-      `
-    };
-
-    await transporter.sendMail(mailOptions);
-    console.log(`✅ Email notification sent to: ${user.email}`);
-    return true;
+    // ... send email ...
   } catch (error) {
     console.error('❌ Email notification failed:', error.message);
     return false;
   }
 }
 
+
+
+
+
+
 // Enhanced notification function with email for ALL events
 async function createComprehensiveNotification(notificationData) {
-  if (!isDatabaseConnected) {
-    console.log('❌ Database not connected for notification creation');
-    return false;
-  }
+  if (!isDatabaseConnected) return false;
 
   try {
+    // Save to database always
     const notificationId = await getNextSequence('notificationId');
-    
-    const notificationDoc = {
-      _id: notificationId,
-      notification_id: notificationId,
-      user_id: notificationData.user_id,
-      title: notificationData.title,
-      message: notificationData.message,
-      type: notificationData.type || 'system',
-      related_ticket_id: notificationData.related_ticket_id || null,
-      related_request_id: notificationData.related_request_id || null,
-      priority: notificationData.priority || 'medium',
-      read: false,
-      created_at: new Date(),
-      updated_at: new Date()
-    };
-
+    const notificationDoc = { /* ... your existing code ... */ };
     await db.collection('notifications').insertOne(notificationDoc);
-    console.log(`✅ Database notification created: ${notificationData.title} for user ${notificationData.user_id}`);
 
-    // 🔥 SEND EMAIL NOTIFICATION FOR ALL EVENTS
-    try {
+    // CHECK CONFIG before sending email
+    const config = await getSystemConfig();
+    if (config.notification_enabled) {
       await sendEmailNotification(notificationData.user_id, notificationData.title, notificationData.message);
-      console.log(`📧 Email notification sent for: ${notificationData.title}`);
-    } catch (emailError) {
-      console.error('❌ Email notification failed (non-critical):', emailError.message);
-      // Continue even if email fails
+    } else {
+      console.log('🔕 Email skipped - notifications disabled in config');
     }
 
     return true;
@@ -8530,7 +8515,6 @@ async function createComprehensiveNotification(notificationData) {
     return false;
   }
 }
-
 
 // Test email notification endpoint
 app.post('/api/test-email-notification', authenticateToken, requireDatabase, async (req, res) => {
