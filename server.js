@@ -2923,42 +2923,33 @@ app.post('/api/register', upload.single('avatar'), requireDatabase, async (req, 
 
 
 // Login endpoint - UPDATED VERSION
+// ========== FIXED LOGIN ENDPOINT - COPY THIS EXACTLY ==========
 app.post('/api/login', requireDatabase, async (req, res) => {
   try {
     const { email, password } = req.body;
     console.log(`🔐 Login attempt for email: ${email} at ${new Date().toISOString()}`);
     
     if (!email || !password) {
-      console.log('❌ Login failed: Missing email or password');
       return res.status(400).json({ success: false, message: 'Email and password are required' });
     }
     
-    // Find user by email (case-insensitive)
     const user = await db.collection('users').findOne({ 
       email: { $regex: new RegExp(`^${email}$`, 'i') } 
     });
     
     if (!user) {
-      console.log(`❌ Login failed: No user found with email ${email}`);
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
     
-    console.log(`👤 User found: ${user.name}, role: ${user.role}, active: ${user.is_active}`);
-    
-    // Check if user is active
     if (user.is_active === false) {
-      console.log(`❌ Login failed: User account is deactivated`);
       return res.status(401).json({ success: false, message: 'Account is deactivated. Please contact administrator.' });
     }
     
-    // Verify password
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
-      console.log(`❌ Login failed: Invalid password for user ${email}`);
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
     
-    // Generate JWT token
     const token = jwt.sign(
       { 
         id: user.user_id, 
@@ -2971,19 +2962,20 @@ app.post('/api/login', requireDatabase, async (req, res) => {
       { expiresIn: '24h' }
     );
     
-    // Remove password from user object
+    // IMPORTANT: Remove password but KEEP avatar_path
     const { password: _, ...userWithoutPassword } = user;
     
     console.log(`✅ Login successful for: ${user.name} (${user.role})`);
+    console.log(`📸 User avatar_path: ${userWithoutPassword.avatar_path || 'none'}`);
     
     res.json({
       success: true,
       message: 'Login successful',
-      user: userWithoutPassword,
+      user: userWithoutPassword,  // This includes avatar_path
       token,
     });
   } catch (error) {
-    console.error(`❌ Login error at ${new Date().toISOString()}:`, error);
+    console.error(`❌ Login error:`, error);
     res.status(500).json({ 
       success: false, 
       message: 'Server error during login: ' + error.message 
@@ -3223,8 +3215,14 @@ app.get('/api/profile/:userId', authenticateToken, requireDatabase, async (req, 
   }
 });
 
+
+
+
+
+
 // Update user profile by ID (FIXED ROUTE - SINGLE VERSION)
 // Update user profile by ID - WITH EMAIL NOTIFICATION
+// ========== FIXED PROFILE UPDATE ENDPOINT - COPY THIS EXACTLY ==========
 app.put('/api/profile/:userId', authenticateToken, requireDatabase, upload.single('avatar'), async (req, res) => {
   try {
     const { userId } = req.params;
@@ -3264,12 +3262,18 @@ app.put('/api/profile/:userId', authenticateToken, requireDatabase, upload.singl
       updated_at: new Date()
     };
     
+    // HANDLE AVATAR UPLOAD - THIS IS THE FIXED PART
     if (req.file) {
-      updateFields.avatar_path = 'assets/avatars/' + req.file.filename;
+      const avatarPath = 'assets/avatars/' + req.file.filename;
+      updateFields.avatar_path = avatarPath;
+      console.log(`📸 New avatar uploaded: ${avatarPath}`);
+      
+      // Delete old avatar if exists
       if (existingUser.avatar_path && existingUser.avatar_path !== 'assets/default_avatar.png') {
         const oldAvatarPath = path.join(__dirname, existingUser.avatar_path);
         if (fs.existsSync(oldAvatarPath)) {
           fs.unlinkSync(oldAvatarPath);
+          console.log(`🗑️ Deleted old avatar: ${existingUser.avatar_path}`);
         }
       }
     }
@@ -3287,102 +3291,20 @@ app.put('/api/profile/:userId', authenticateToken, requireDatabase, upload.singl
       return res.status(404).json({ success: false, message: 'User not found' });
     }
     
-    // 🔥 SEND PROFILE UPDATE EMAIL
-    try {
-      const changesDetected = [];
-      if (name !== existingUser.name) changesDetected.push(`Name: "${existingUser.name}" → "${name}"`);
-      if (email !== existingUser.email) changesDetected.push(`Email: "${existingUser.email}" → "${email}"`);
-      if (phone_number !== existingUser.phone_number) changesDetected.push('Phone number updated');
-      if (req.file) changesDetected.push('Profile picture updated');
-      
-      const changesText = changesDetected.length > 0 
-        ? changesDetected.map(c => `• ${c}`).join('<br>')
-        : '• Profile information updated';
-      
-      const profileUpdateHtml = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
-          <div style="background: #007bff; padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
-            <h1 style="color: white; margin: 0;">📝 Profile Updated</h1>
-          </div>
-          <div style="padding: 20px;">
-            <h2 style="color: #333;">Hello ${name},</h2>
-            <p style="font-size: 16px; color: #555; line-height: 1.6;">
-              Your profile information has been updated successfully.
-            </p>
-            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
-              <p style="margin: 0; color: #666; font-size: 14px;">
-                <strong>Changes Made:</strong><br>
-                ${changesText}
-              </p>
-            </div>
-            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
-              <p style="margin: 0; color: #666; font-size: 14px;">
-                <strong>Updated Profile:</strong><br>
-                <strong>Name:</strong> ${name}<br>
-                <strong>Email:</strong> ${email}<br>
-                <strong>Phone:</strong> ${phone_number || 'N/A'}<br>
-                <strong>Updated At:</strong> ${new Date().toLocaleString()}
-              </p>
-            </div>
-            <p style="color: #dc3545; font-size: 14px;">
-              ⚠️ If you did NOT make these changes, please contact IT support immediately!
-            </p>
-          </div>
-          <div style="background-color: #f8f9fa; padding: 15px; border-radius: 0 0 10px 10px; text-align: center;">
-            <p style="margin: 0; color: #666; font-size: 12px;">
-              Ethiopian Statistical Service IT Help Desk
-            </p>
-          </div>
-        </div>
-      `;
-      
-      const mailOptions = {
-        from: '"IT Help Desk" <hussenseid670@gmail.com>',
-        to: existingUser.email,
-        subject: '📝 Profile Updated - IT Help Desk',
-        html: profileUpdateHtml
-      };
-      
-      await transporter.sendMail(mailOptions);
-      console.log(`✅ Profile update email sent to: ${existingUser.email}`);
-      
-      // If email changed, also send to new email
-      if (email !== existingUser.email) {
-        const mailOptions2 = {
-          from: '"IT Help Desk" <hussenseid670@gmail.com>',
-          to: email,
-          subject: '📝 Email Address Updated - IT Help Desk',
-          html: profileUpdateHtml
-        };
-        await transporter.sendMail(mailOptions2);
-        console.log(`✅ Profile update email also sent to new email: ${email}`);
-      }
-    } catch (emailError) {
-      console.error('❌ Profile update email failed:', emailError.message);
-    }
-
-    // 🔥 NOTIFY ADMIN
-    try {
-      await notifyAdmin('📝 User Profile Updated', 
-        `${existingUser.name} updated their profile information.`, {
-        userName: name,
-        userEmail: email,
-        action: 'profile_update'
-      });
-    } catch (adminEmailError) {
-      console.error('❌ Admin notification failed:', adminEmailError.message);
-    }
-    
+    // IMPORTANT: Get the UPDATED user WITH the new avatar_path
     const updatedUser = await db.collection('users').findOne(
       { user_id: parseInt(userId) },
       { projection: { password: 0 } }
     );
     
     console.log(`✅ Profile updated successfully for userId: ${userId}`);
+    console.log(`📸 New avatar_path in response: ${updatedUser.avatar_path}`);
+    
+    // SEND BACK THE COMPLETE UPDATED USER WITH AVATAR_PATH
     res.json({
       success: true,
       message: 'Profile updated successfully',
-      user: updatedUser,
+      user: updatedUser  // This MUST include avatar_path
     });
     
   } catch (error) {
@@ -3390,6 +3312,9 @@ app.put('/api/profile/:userId', authenticateToken, requireDatabase, upload.singl
     res.status(500).json({ success: false, message: 'Server error: ' + error.message });
   }
 });
+
+
+
 
 // Change password endpoint (FIXED ROUTE - BOTH VERSIONS FOR COMPATIBILITY)
 // Change password endpoint - WITH EMAIL NOTIFICATION
