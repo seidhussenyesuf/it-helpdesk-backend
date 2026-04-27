@@ -1835,6 +1835,17 @@ const trainingData = [
   ['database monitoring alert', 'Database'],
 
   // ===== CONFIGURATION (Team 7) - Settings, setup =====
+  // ADD THESE TO CONFIGURATION SECTION
+['cannot open file or folder', 'Configuration'],
+['file access denied permission', 'Configuration'],
+['folder access denied', 'Configuration'],
+['file not opening', 'Configuration'],
+['folder not accessible', 'Configuration'],
+['application not working properly', 'Configuration'],
+['application settings wrong', 'Configuration'],
+['settings not saving', 'Configuration'],
+['preferences reset', 'Configuration'],
+['default settings changed', 'Configuration'],
   ['system configuration settings change', 'Configuration'],
   ['application configuration file error', 'Configuration'],
   ['server configuration optimization', 'Configuration'],
