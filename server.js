@@ -6980,9 +6980,12 @@ app.get('/api/admin/system-config', authenticateToken, requireAdmin, requireData
 });
 
 // Update system configuration
+// Update system configuration
 app.put('/api/admin/system-config', authenticateToken, requireAdmin, requireDatabase, async (req, res) => {
   try {
     const configData = req.body;
+    
+    console.log('💾 Saving system config:', JSON.stringify(configData));
     
     const result = await db.collection('system_config').updateOne(
       { _id: 'main' },
@@ -6996,7 +6999,7 @@ app.put('/api/admin/system-config', authenticateToken, requireAdmin, requireData
       { upsert: true }
     );
     
-    console.log('✅ System configuration updated by admin:', req.user.id);
+    console.log('✅ System configuration saved successfully');
     
     res.json({ 
       success: true, 
@@ -7219,7 +7222,15 @@ app.post('/api/procurement-requests', authenticateToken, requireDatabase, async 
 
 
 
-
+async function isNotificationEnabled() {
+  try {
+    const config = await db.collection('system_config').findOne({ _id: 'main' });
+    if (!config) return true; // Default: enabled
+    return config.notification_enabled !== false;
+  } catch (error) {
+    return true; // Default: enabled if error
+  }
+}
 
 
 
@@ -8466,20 +8477,50 @@ app.post('/api/test-email', authenticateToken, requireAdmin, async (req, res) =>
 // Enhanced email notification function
 async function sendEmailNotification(userId, title, message) {
   try {
-    // CHECK CONFIG FIRST
-    const config = await getSystemConfig();
-    if (!config.notification_enabled) {
-      console.log('🔕 Email notifications disabled in config - skipping');
+    // CHECK IF NOTIFICATIONS ARE ENABLED
+    const enabled = await isNotificationEnabled();
+    if (!enabled) {
+      console.log('🔕 Email notifications are DISABLED in system config');
       return false;
     }
     
-    // Rest of your existing code...
+    console.log(`📧 Attempting to send email to user ${userId}`);
+    
+    // Get user email from database
     const user = await db.collection('users').findOne({ user_id: userId });
     if (!user || !user.email) {
       console.log(`❌ User ${userId} not found or no email address`);
       return false;
     }
-    // ... send email ...
+
+    console.log(`📧 Sending email to: ${user.email}`);
+
+    const mailOptions = {
+      from: '"IT Help Desk" <hussenseid670@gmail.com>',
+      to: user.email,
+      subject: `IT Help Desk: ${title}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+          <div style="background: #007bff; padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
+            <h1 style="color: white; margin: 0;">IT Help Desk Notification</h1>
+          </div>
+          <div style="padding: 20px;">
+            <h2 style="color: #333;">${title}</h2>
+            <p style="font-size: 16px; color: #555; line-height: 1.6;">${message}</p>
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <p style="margin: 0; color: #666; font-size: 14px;">
+                <strong>Time:</strong> ${new Date().toLocaleString()}<br>
+                <strong>User:</strong> ${user.name}
+              </p>
+            </div>
+          </div>
+        </div>
+      `
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log(`✅ Email notification sent to: ${user.email}`);
+    return true;
   } catch (error) {
     console.error('❌ Email notification failed:', error.message);
     return false;
