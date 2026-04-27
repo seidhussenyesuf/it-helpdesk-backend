@@ -1529,6 +1529,19 @@ app.post('/api/user/backup-my-data', authenticateToken, requireDatabase, async (
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
 // ========== AI CLASSIFICATION FUNCTIONS ==========
 
 // Enhanced ML training data
@@ -1537,15 +1550,315 @@ app.post('/api/user/backup-my-data', authenticateToken, requireDatabase, async (
 // Updated training data with MORE examples for better accuracy
 const enhancedClassifier = new natural.BayesClassifier();
 
-// Expanded training data
-// ========== ENHANCED AI CLASSIFICATION - FULL ONLINE AI ==========
-
-// Expanded training data with MORE hardware examples
-// ========== ENHANCED AI CLASSIFICATION - BETTER MAINTENANCE VS HARDWARE ==========
-
-// Expanded training data with CLEAR distinction between Maintenance and Hardware
+// ========== SUPER ADVANCED AI TRAINING DATA ==========
 const trainingData = [
-  // ===== MAINTENANCE ISSUES (MUST COME FIRST for priority) =====
+  // ===== HARDWARE (Team 1) - Physical devices, components, peripherals =====
+  ['usb ports not working', 'Hardware'],
+  ['usb port broken damaged', 'Hardware'],
+  ['usb device not recognized detected', 'Hardware'],
+  ['usb not detecting connecting', 'Hardware'],
+  ['keyboard not working typing', 'Hardware'],
+  ['keyboard keys stuck broken', 'Hardware'],
+  ['keyboard unresponsive not responding', 'Hardware'],
+  ['keyboard backlight not working', 'Hardware'],
+  ['mouse not working moving', 'Hardware'],
+  ['mouse cursor not moving erratic', 'Hardware'],
+  ['mouse click not working right left', 'Hardware'],
+  ['mouse scroll wheel broken', 'Hardware'],
+  ['keyboard and mouse not working', 'Hardware'],
+  ['computer slow performance lagging', 'Hardware'],
+  ['computer overheating fan noise loud', 'Hardware'],
+  ['computer wont turn on no power', 'Hardware'],
+  ['computer shuts down suddenly restarts', 'Hardware'],
+  ['computer keeps restarting looping', 'Hardware'],
+  ['computer smells like burning smoke', 'Hardware'],
+  ['computer freezing randomly crashing', 'Hardware'],
+  ['computer wont boot startup', 'Hardware'],
+  ['laptop battery not charging power', 'Hardware'],
+  ['laptop screen cracked broken', 'Hardware'],
+  ['laptop hinge broken loose', 'Hardware'],
+  ['laptop battery drains fast', 'Hardware'],
+  ['printer not printing paper jam', 'Hardware'],
+  ['printer ink cartridge toner problem', 'Hardware'],
+  ['printer not detected recognized', 'Hardware'],
+  ['monitor screen black no display', 'Hardware'],
+  ['monitor has lines stripes dead pixel', 'Hardware'],
+  ['monitor no signal detected', 'Hardware'],
+  ['display screen flickering distorted', 'Hardware'],
+  ['hard drive making clicking noise', 'Hardware'],
+  ['hard drive ssd failure detected', 'Hardware'],
+  ['external hard drive not detected', 'Hardware'],
+  ['ram memory failure upgrade faulty', 'Hardware'],
+  ['cpu processor overheating thermal', 'Hardware'],
+  ['power supply failure replacement', 'Hardware'],
+  ['motherboard issue boot failure', 'Hardware'],
+  ['graphics card gpu issue fan', 'Hardware'],
+  ['speaker no sound audio issues', 'Hardware'],
+  ['webcam camera not working failed', 'Hardware'],
+  ['touchpad trackpad not responding', 'Hardware'],
+  ['headphone jack broken audio', 'Hardware'],
+  ['bluetooth adapter not working', 'Hardware'],
+  ['cd dvd drive not reading', 'Hardware'],
+  ['power cord adapter charger broken', 'Hardware'],
+  ['battery cmos dead replacement', 'Hardware'],
+  ['fan not spinning grinding noise', 'Hardware'],
+  ['liquid spill water damage keyboard', 'Hardware'],
+  ['scanner not working broken', 'Hardware'],
+  ['fax machine broken', 'Hardware'],
+  ['projector lamp bulb replacement', 'Hardware'],
+  ['ups battery replacement', 'Hardware'],
+  ['peripheral device not working', 'Hardware'],
+  ['input device not responding', 'Hardware'],
+  ['device not recognized detected', 'Hardware'],
+  ['screen backlight broken', 'Hardware'],
+  ['power button not responding', 'Hardware'],
+  ['computer case damaged broken', 'Hardware'],
+  ['cable wire broken frayed', 'Hardware'],
+  ['dock station not working', 'Hardware'],
+  ['tablet not charging turning on', 'Hardware'],
+  ['brightness control not working', 'Hardware'],
+  ['volume button not working', 'Hardware'],
+  ['fingerprint scanner not working', 'Hardware'],
+  ['sd card reader not working', 'Hardware'],
+  ['hdmi port vga display port broken', 'Hardware'],
+  ['audio jack microphone port broken', 'Hardware'],
+  ['ethernet port network card broken', 'Hardware'],
+  ['wifi card wireless adapter broken', 'Hardware'],
+  ['sim card slot not working', 'Hardware'],
+  ['stylus pen not working', 'Hardware'],
+  ['barcode scanner not working', 'Hardware'],
+  ['receipt printer not working', 'Hardware'],
+  ['cash drawer not opening', 'Hardware'],
+  ['card reader not working', 'Hardware'],
+  ['pos terminal not working', 'Hardware'],
+
+  // ===== SOFTWARE (Team 2) - Applications, programs, OS =====
+  ['software application crash error', 'Software'],
+  ['program wont install installation failed', 'Software'],
+  ['program uninstall failed', 'Software'],
+  ['software update failed', 'Software'],
+  ['microsoft office word excel powerpoint not working', 'Software'],
+  ['microsoft outlook email not sending receiving', 'Software'],
+  ['microsoft teams not working', 'Software'],
+  ['adobe photoshop premiere crash', 'Software'],
+  ['adobe acrobat pdf reader not opening', 'Software'],
+  ['browser chrome firefox edge not working', 'Software'],
+  ['browser slow crashing freezing', 'Software'],
+  ['browser extension plugin not working', 'Software'],
+  ['operating system windows update failed', 'Software'],
+  ['windows update stuck failing', 'Software'],
+  ['windows activation license expired', 'Software'],
+  ['mac os update failed', 'Software'],
+  ['linux update package failed', 'Software'],
+  ['application not responding frozen stuck', 'Software'],
+  ['application keeps crashing closing', 'Software'],
+  ['software wont open start', 'Software'],
+  ['software license activation expired', 'Software'],
+  ['software compatibility issues', 'Software'],
+  ['software bug glitch error message', 'Software'],
+  ['driver update failed not working', 'Software'],
+  ['driver missing not found', 'Software'],
+  ['java runtime error', 'Software'],
+  ['net framework error', 'Software'],
+  ['visual studio code not working', 'Software'],
+  ['database client not connecting', 'Software'],
+  ['antivirus software not updating', 'Software'],
+  ['vpn client not connecting', 'Software'],
+  ['remote desktop not connecting', 'Software'],
+  ['zoom teams meeting app not working', 'Software'],
+  ['skype not working', 'Software'],
+  ['slack discord not working', 'Software'],
+  ['dropbox onedrive not syncing', 'Software'],
+  ['google drive not syncing', 'Software'],
+  ['backup software not working', 'Software'],
+  ['compression zip tool not working', 'Software'],
+  ['media player video not playing', 'Software'],
+  ['music audio player not working', 'Software'],
+  ['image editor not working', 'Software'],
+  ['screen recording software not working', 'Software'],
+  ['screenshot tool not working', 'Software'],
+  ['password manager not working', 'Software'],
+  ['note taking app not working', 'Software'],
+  ['calendar app not syncing', 'Software'],
+  ['calculator app not working', 'Software'],
+  ['clock alarm not working', 'Software'],
+  ['weather app not updating', 'Software'],
+  ['maps navigation app not working', 'Software'],
+
+  // ===== NETWORK (Team 3) - Internet, connectivity, DNS, VPN =====
+  ['internet connection slow speed', 'Network'],
+  ['internet not working no access', 'Network'],
+  ['wifi not connecting wireless network', 'Network'],
+  ['wifi signal weak dropping', 'Network'],
+  ['wifi password not accepting', 'Network'],
+  ['vpn connection failed remote access', 'Network'],
+  ['vpn not connecting disconnected', 'Network'],
+  ['network drive not accessible shared', 'Network'],
+  ['network folder share not accessible', 'Network'],
+  ['cannot access shared resources', 'Network'],
+  ['dns resolution failed website', 'Network'],
+  ['dns server not responding', 'Network'],
+  ['network cable ethernet disconnected', 'Network'],
+  ['router configuration issues modem', 'Network'],
+  ['router not working restart needed', 'Network'],
+  ['ip address conflict network', 'Network'],
+  ['bandwidth usage high slow', 'Network'],
+  ['wireless access point issues', 'Network'],
+  ['network printer not found', 'Network'],
+  ['firewall blocking application network', 'Network'],
+  ['proxy server configuration issues', 'Network'],
+  ['voip phone system issues', 'Network'],
+  ['lan connection dropped disconnected', 'Network'],
+  ['network latency ping high slow', 'Network'],
+  ['dhcp not assigning ip address', 'Network'],
+  ['network switch port failure', 'Network'],
+  ['cannot reach website server', 'Network'],
+  ['slow downloading browsing internet', 'Network'],
+  ['download speed very slow', 'Network'],
+  ['browsing web pages slow loading', 'Network'],
+  ['internet browsing is slow', 'Network'],
+  ['web pages not loading', 'Network'],
+  ['buffering when streaming videos', 'Network'],
+  ['upload speed slow', 'Network'],
+  ['web browsing extremely slow', 'Network'],
+  ['network timeout connection refused', 'Network'],
+  ['no internet access limited connectivity', 'Network'],
+  ['isp internet service provider down', 'Network'],
+  ['ping request timed out', 'Network'],
+  ['traceroute failing', 'Network'],
+  ['subnet mask gateway wrong', 'Network'],
+  ['nat port forwarding not working', 'Network'],
+  ['cloud service not accessible', 'Network'],
+  ['website blocked cannot access', 'Network'],
+  ['email server not connecting', 'Network'],
+  ['ftp server not connecting', 'Network'],
+  ['ssh connection refused', 'Network'],
+  ['telnet connection failed', 'Network'],
+  ['remote server not reachable', 'Network'],
+
+  // ===== SECURITY (Team 4) - Viruses, malware, phishing =====
+  ['virus malware detected infection', 'Security'],
+  ['virus scan found threats', 'Security'],
+  ['antivirus alert warning threat', 'Security'],
+  ['antivirus not working expired', 'Security'],
+  ['suspicious email phishing scam', 'Security'],
+  ['suspicious link clicked', 'Security'],
+  ['firewall blocking access application', 'Security'],
+  ['unauthorized access attempt login', 'Security'],
+  ['data breach concern information', 'Security'],
+  ['ransomware encrypted files locked', 'Security'],
+  ['ransomware attack detected', 'Security'],
+  ['security patch needed update', 'Security'],
+  ['account compromised hacked', 'Security'],
+  ['privacy concerns data protection', 'Security'],
+  ['spam email filtering issues', 'Security'],
+  ['two factor authentication problems', 'Security'],
+  ['encryption issues data protection', 'Security'],
+  ['security certificate errors expired', 'Security'],
+  ['intrusion detection system alerts', 'Security'],
+  ['ddos attack detected', 'Security'],
+  ['brute force attack detected', 'Security'],
+  ['password stolen compromised', 'Security'],
+  ['identity theft concern', 'Security'],
+  ['social engineering attack', 'Security'],
+  ['malicious software detected', 'Security'],
+  ['spyware adware detected', 'Security'],
+  ['rootkit detected', 'Security'],
+  ['trojan horse detected', 'Security'],
+  ['worm virus detected', 'Security'],
+  ['keylogger detected', 'Security'],
+  ['botnet infection', 'Security'],
+  ['cryptojacking detected', 'Security'],
+  ['zero day exploit', 'Security'],
+  ['vulnerability scan found issues', 'Security'],
+  ['penetration test findings', 'Security'],
+  ['security audit issue', 'Security'],
+  ['compliance violation', 'Security'],
+
+  // ===== ACCOUNT (Team 5) - Login, password, permissions =====
+  ['user account locked disabled', 'Account'],
+  ['account locked out', 'Account'],
+  ['permissions access denied folder', 'Account'],
+  ['access denied permission required', 'Account'],
+  ['profile corrupted user settings', 'Account'],
+  ['password expired change reset', 'Account'],
+  ['forgot password reset needed', 'Account'],
+  ['multi factor authentication mfa problem', 'Account'],
+  ['two factor authentication not working', 'Account'],
+  ['account settings reset default', 'Account'],
+  ['user preferences lost saved', 'Account'],
+  ['login credentials invalid wrong', 'Account'],
+  ['cannot log in login failed', 'Account'],
+  ['username password incorrect', 'Account'],
+  ['domain join issues computer', 'Account'],
+  ['access rights missing permissions', 'Account'],
+  ['active directory sync issues', 'Account'],
+  ['user profile service failed', 'Account'],
+  ['account creation new user request', 'Account'],
+  ['group policy issues settings', 'Account'],
+  ['single sign on sso problems', 'Account'],
+  ['account deactivated suspended', 'Account'],
+  ['role change request', 'Account'],
+  ['department transfer access', 'Account'],
+  ['email account not working', 'Account'],
+  ['shared mailbox access request', 'Account'],
+  ['distribution list membership', 'Account'],
+  ['security group membership', 'Account'],
+  ['admin rights request', 'Account'],
+  ['user account audit', 'Account'],
+  ['account verification needed', 'Account'],
+  ['identity verification failed', 'Account'],
+  ['oauth token expired', 'Account'],
+  ['api key access issue', 'Account'],
+
+  // ===== DATABASE (Team 6) - SQL, data storage =====
+  ['database slow performance query', 'Database'],
+  ['sql server connection failed timeout', 'Database'],
+  ['database backup failed recovery', 'Database'],
+  ['mysql postgresql oracle db connection', 'Database'],
+  ['database table corrupted data', 'Database'],
+  ['query execution plan performance', 'Database'],
+  ['database replication sync issues', 'Database'],
+  ['stored procedure function error', 'Database'],
+  ['database migration upgrade problems', 'Database'],
+  ['deadlock timeout transaction', 'Database'],
+  ['database storage space running out', 'Database'],
+  ['database index fragmentation', 'Database'],
+  ['database security permissions', 'Database'],
+  ['data import export backup', 'Database'],
+  ['database clustering high availability', 'Database'],
+  ['mongodb connection failed', 'Database'],
+  ['redis cache not working', 'Database'],
+  ['data integrity issue', 'Database'],
+  ['database schema change', 'Database'],
+  ['database user access request', 'Database'],
+  ['database monitoring alert', 'Database'],
+
+  // ===== CONFIGURATION (Team 7) - Settings, setup =====
+  ['system configuration settings change', 'Configuration'],
+  ['application configuration file error', 'Configuration'],
+  ['server configuration optimization', 'Configuration'],
+  ['network device configuration router', 'Configuration'],
+  ['software settings preference', 'Configuration'],
+  ['environment variable configuration', 'Configuration'],
+  ['registry settings configuration', 'Configuration'],
+  ['configuration management tool issues', 'Configuration'],
+  ['deployment configuration pipeline', 'Configuration'],
+  ['load balancer configuration settings', 'Configuration'],
+  ['firewall rule configuration changes', 'Configuration'],
+  ['dns configuration domain name setup', 'Configuration'],
+  ['email server configuration smtp', 'Configuration'],
+  ['backup configuration schedule setup', 'Configuration'],
+  ['security policy configuration', 'Configuration'],
+  ['group policy configuration', 'Configuration'],
+  ['iis apache nginx configuration', 'Configuration'],
+  ['docker container configuration', 'Configuration'],
+  ['kubernetes configuration', 'Configuration'],
+  ['ci cd pipeline configuration', 'Configuration'],
+  ['monitoring tool configuration', 'Configuration'],
+  ['logging configuration setup', 'Configuration'],
+
+  // ===== MAINTENANCE (Team 8) - Updates, patches, scheduled work =====
   ['system maintenance schedule downtime', 'Maintenance'],
   ['preventive maintenance hardware software', 'Maintenance'],
   ['server maintenance reboot required', 'Maintenance'],
@@ -1553,7 +1866,7 @@ const trainingData = [
   ['storage maintenance cleanup required', 'Maintenance'],
   ['backup maintenance verification needed', 'Maintenance'],
   ['security maintenance patch management', 'Maintenance'],
-  ['database maintenance optimization required', 'Maintenance'],
+  ['database maintenance optimization', 'Maintenance'],
   ['application maintenance update deployment', 'Maintenance'],
   ['infrastructure maintenance upgrade', 'Maintenance'],
   ['scheduled maintenance window activities', 'Maintenance'],
@@ -1588,461 +1901,176 @@ const trainingData = [
   ['performance tuning maintenance', 'Maintenance'],
   ['capacity planning maintenance', 'Maintenance'],
   ['resource allocation maintenance', 'Maintenance'],
-  
-  // ===== HARDWARE ISSUES (Physical device problems) =====
-  ['computer slow performance lagging freezing', 'Hardware'],
-  ['laptop battery not charging power issue', 'Hardware'],
-  ['printer not printing paper jam error', 'Hardware'],
-  ['monitor screen black no display', 'Hardware'],
-  ['keyboard keys not working unresponsive', 'Hardware'],
-  ['mouse cursor moving erratically', 'Hardware'],
-  ['computer overheating fan noise loud', 'Hardware'],
-  ['hard drive making clicking sounds', 'Hardware'],
-  ['blue screen error crash restart', 'Hardware'],
-  ['computer wont turn on no power', 'Hardware'],
-  ['display flickering distorted graphics', 'Hardware'],
-  ['usb port not working device unrecognized', 'Hardware'],
-  ['speaker no sound audio issues', 'Hardware'],
-  ['webcam not working camera failed', 'Hardware'],
-  ['laptop screen cracked broken', 'Hardware'],
-  ['ram memory failure upgrade', 'Hardware'],
-  ['cpu processor overheating thermal', 'Hardware'],
-  ['power supply failure replacement', 'Hardware'],
-  ['motherboard issue boot failure', 'Hardware'],
-  ['graphics card gpu issue', 'Hardware'],
-  ['cd dvd drive not reading', 'Hardware'],
-  ['headphone jack broken', 'Hardware'],
-  ['bluetooth adapter not working', 'Hardware'],
-  ['touchpad not responding', 'Hardware'],
-  ['desktop computer wont start', 'Hardware'],
-  ['computer shuts down suddenly restarts', 'Hardware'],
-  ['system randomly restarts crashes', 'Hardware'],
-  ['computer keeps restarting looping', 'Hardware'],
-  ['device powers off randomly', 'Hardware'],
-  ['computer smells like burning', 'Hardware'],
-  ['laptop hinge broken loose', 'Hardware'],
-  ['power cord adapter broken', 'Hardware'],
-  ['screen backlight not working', 'Hardware'],
-  ['dead pixels on monitor', 'Hardware'],
-  ['computer case damaged', 'Hardware'],
-  ['liquid spill on keyboard', 'Hardware'],
-  ['broken usb connector port', 'Hardware'],
-  ['cpu fan not spinning', 'Hardware'],
-  ['graphics card fan loud noise', 'Hardware'],
-  ['power button not responding', 'Hardware'],
-  ['laptop keyboard keys stuck', 'Hardware'],
-  ['monitor has lines stripes', 'Hardware'],
-  ['screen flickers when moved', 'Hardware'],
-  ['laptop trackpad not clicking', 'Hardware'],
-  ['external hard drive not detected', 'Hardware'],
-  ['ssd drive failure', 'Hardware'],
-  ['ram stick faulty', 'Hardware'],
-  ['cmos battery dead', 'Hardware'],
-  ['power surge damaged computer', 'Hardware'],
-  ['monitor no signal detected', 'Hardware'],
-  ['computer freezing randomly', 'Hardware'],
-  ['laptop battery drains fast', 'Hardware'],
-  ['charger not working', 'Hardware'],
-  ['screen has dark spots', 'Hardware'],
-  ['keyboard backlight broken', 'Hardware'],
-  ['fan makes grinding noise', 'Hardware'],
-  ['computer wont boot', 'Hardware'],
-  ['bios error on startup', 'Hardware'],
-  ['computer stuck on loading screen', 'Hardware'],
-  ['device not recognized usb', 'Hardware'],
-  ['printer paper jam', 'Hardware'],
-  ['printer ink cartridge problem', 'Hardware'],
-  ['scanner not working', 'Hardware'],
-  ['fax machine broken', 'Hardware'],
-  ['projector lamp needs replacement', 'Hardware'],
-  ['ups battery needs replacement', 'Hardware'],
-  
-  // ===== SOFTWARE ISSUES =====
-  ['software application crash error', 'Software'],
-  ['program wont install installation failed', 'Software'],
-  ['update failed cannot update system', 'Software'],
-  ['email not sending receiving outlook', 'Software'],
-  ['password reset forgot password login', 'Software'],
-  ['login issues cannot sign in account', 'Software'],
-  ['application freezing not responding', 'Software'],
-  ['license activation failed software', 'Software'],
-  ['compatibility issues program', 'Software'],
-  ['performance slow lagging software', 'Software'],
-  ['microsoft office word excel powerpoint', 'Software'],
-  ['adobe photoshop premiere crash', 'Software'],
-  ['browser chrome firefox edge issues', 'Software'],
-  ['operating system windows linux mac', 'Software'],
-  ['driver update failed device', 'Software'],
-  ['software license expired renewal', 'Software'],
-  ['app not opening crashing startup', 'Software'],
-  ['software bug glitch error', 'Software'],
-  ['program uninstall failed', 'Software'],
-  ['software configuration settings', 'Software'],
-  ['windows update stuck', 'Software'],
-  ['mac os update failed', 'Software'],
-  ['application not responding', 'Software'],
-  ['error message popup dialog', 'Software'],
-  ['program keeps crashing closing', 'Software'],
-  ['software wont open', 'Software'],
-  
-  // ===== NETWORK ISSUES =====
-  ['internet connection slow speed', 'Network'],
-  ['wifi not connecting wireless network', 'Network'],
-  ['vpn connection failed remote access', 'Network'],
-  ['network drive not accessible shared', 'Network'],
-  ['cannot access shared resources folder', 'Network'],
-  ['dns resolution failed website', 'Network'],
-  ['network cable disconnected ethernet', 'Network'],
-  ['router configuration issues modem', 'Network'],
-  ['ip address conflict network', 'Network'],
-  ['bandwidth usage high slow', 'Network'],
-  ['wireless access point issues', 'Network'],
-  ['network printer not found', 'Network'],
-  ['firewall blocking application network', 'Network'],
-  ['proxy server configuration issues', 'Network'],
-  ['voip phone system issues', 'Network'],
-  ['lan connection dropped disconnected', 'Network'],
-  ['network latency ping high slow', 'Network'],
-  ['dhcp not assigning ip address', 'Network'],
-  ['network switch port failure', 'Network'],
-  ['cannot reach website server', 'Network'],
-  
-  // ===== SECURITY ISSUES =====
-  ['virus malware detected infection', 'Security'],
-  ['suspicious email phishing scam', 'Security'],
-  ['firewall blocking access application', 'Security'],
-  ['antivirus alert warning threat', 'Security'],
-  ['unauthorized access attempt login', 'Security'],
-  ['data breach concern information', 'Security'],
-  ['ransomware encrypted files locked', 'Security'],
-  ['security patch needed update', 'Security'],
-  ['account compromised hacked', 'Security'],
-  ['privacy concerns data protection', 'Security'],
-  ['spam email filtering issues', 'Security'],
-  ['two factor authentication problems', 'Security'],
-  ['encryption issues data protection', 'Security'],
-  ['security certificate errors', 'Security'],
-  ['intrusion detection system alerts', 'Security'],
-  
-  // ===== ACCOUNT ISSUES =====
-  ['user account locked disabled', 'Account'],
-  ['permissions access denied folder', 'Account'],
-  ['profile corrupted user settings', 'Account'],
-  ['password expired change reset', 'Account'],
-  ['multi factor authentication mfa', 'Account'],
-  ['account settings reset default', 'Account'],
-  ['user preferences lost saved', 'Account'],
-  ['login credentials invalid wrong', 'Account'],
-  ['domain join issues computer', 'Account'],
-  ['access rights missing permissions', 'Account'],
-  ['active directory sync issues', 'Account'],
-  ['user profile service failed', 'Account'],
-  ['account creation new user', 'Account'],
-  ['group policy issues settings', 'Account'],
-  ['single sign on sso problems', 'Account'],
-  ['cant log in cannot login', 'Account'],
-  ['username password incorrect', 'Account'],
-  
-  // ===== DATABASE ISSUES =====
-  ['database slow performance query optimization', 'Database'],
-  ['sql server connection failed timeout', 'Database'],
-  ['database backup failed recovery issues', 'Database'],
-  ['mysql postgresql oracle db connection', 'Database'],
-  ['database table corrupted data integrity', 'Database'],
-  ['query execution plan performance tuning', 'Database'],
-  ['database replication sync issues', 'Database'],
-  ['stored procedure function error', 'Database'],
-  ['database migration upgrade problems', 'Database'],
-  ['deadlock timeout transaction issues', 'Database'],
-  ['database storage space running out', 'Database'],
-  
-  // ===== CONFIGURATION ISSUES =====
-  ['system configuration settings change', 'Configuration'],
-  ['application configuration file error', 'Configuration'],
-  ['server configuration optimization tuning', 'Configuration'],
-  ['network device configuration router switch', 'Configuration'],
-  ['software settings preference configuration', 'Configuration'],
-  ['environment variable configuration setup', 'Configuration'],
-  ['registry settings configuration changes', 'Configuration'],
-  ['configuration management tool issues', 'Configuration'],
-  ['deployment configuration pipeline setup', 'Configuration'],
-  ['load balancer configuration settings', 'Configuration'],
 ];
 
-// Train the classifier
 console.log('🤖 Training AI classifier with ' + trainingData.length + ' examples...');
-
-// Create a new classifier instance to clear previous training
 const { BayesClassifier } = natural;
-// Reassign enhancedClassifier to a new instance
 Object.assign(enhancedClassifier, new BayesClassifier());
-
 trainingData.forEach(([text, category]) => {
   enhancedClassifier.addDocument(text, category);
 });
 enhancedClassifier.train();
 console.log('✅ AI classifier training completed');
 
-
-
-
-
-// ========== FULL ONLINE AI CLASSIFICATION ==========
-async function classifyTicketWithAI(description) {
-  try {
-    console.log('🤖 ========================================');
-    console.log('🤖 AI CLASSIFICATION REQUEST');
-    console.log('🤖 Description: "' + description.substring(0, 100) + (description.length > 100 ? '...' : '') + '"');
-    console.log('🤖 ========================================');
-    
-    // First try local classifier
-    const localClassification = enhancedClassifier.getClassifications(description);
-    const topLocalCategory = localClassification[0].label;
-    const localConfidence = localClassification[0].value;
-    
-    console.log(`🤖 Local AI Top 3:`);
-    localClassification.slice(0, 3).forEach((c, i) => {
-      console.log(`   ${i+1}. ${c.label}: ${(c.value * 100).toFixed(1)}%`);
-    });
-    
-    // If local confidence is VERY high (>92%), use it
-    if (localConfidence > 0.92) {
-      console.log(`✅ Local classifier VERY HIGH confidence (${(localConfidence * 100).toFixed(1)}%), using it`);
-      return { 
-        issue_type: topLocalCategory, 
-        confidence: localConfidence,
-        method: 'local_high_confidence',
-        reason: 'Local classifier has very high confidence'
-      };
-    }
-    
-    // Try Gemini AI (FREE)
-    if (genAI) {
-      try {
-        console.log('🌐 Attempting Google Gemini AI classification...');
-        
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-        
-        const prompt = `You are an IT help desk ticket classifier. Classify this ticket into EXACTLY ONE category.
-
-CATEGORIES WITH EXAMPLES:
-- Hardware: Physical device is broken/faulty (computer shuts down, laptop restarts, printer broken, screen cracked, battery not charging, overheating, fan noise, keyboard not working, USB port damaged, power failure, RAM issues, CPU problems, hard drive failure, beeping sounds, liquid spills, burning smell, physical damage, monitor display issues)
-- Maintenance: Routine upkeep, updates, or scheduled work (system maintenance, preventive checks, scheduled updates, patch deployment, regular cleanup, server reboot for maintenance, firmware upgrades, planned downtime, routine tasks, system health checks, weekly/monthly maintenance, software updates, security patches, system optimization, disk cleanup, cache clearing)
-- Software: Application problems (program crashes, software error, installation failed, Microsoft Office problems, browser issues, app not opening, license expired, driver issues, Windows/Mac/Linux problems, software bug, error messages)
-- Network: Connection problems (no internet, WiFi not working, VPN failed, DNS issues, router problems, slow connection, ethernet disconnected, cannot reach server)
-- Security: Safety problems (virus, malware, hacking, phishing, antivirus alert, ransomware, data breach, suspicious activity, spam)
-- Account: Login problems (password reset, account locked, access denied, login failed, authentication, permissions, MFA problems)
-- Database: Data problems (SQL errors, database connection failed, query issues, data corruption, backup failure, MySQL/PostgreSQL/Oracle problems)
-- Configuration: Setup problems (settings incorrect, deployment failed, registry issues, environment variables, config changes)
-- Other: ONLY if absolutely none of the above fit
-
-CRITICAL DISTINCTION - MAINTENANCE vs HARDWARE:
-- "Need to schedule maintenance", "regular maintenance check", "routine maintenance" = MAINTENANCE
-- "Computer is broken", "laptop crashed", "hardware failed" = HARDWARE
-- "System update needed", "patch deployment", "upgrade scheduled" = MAINTENANCE
-- "hardware replacement maintenance" = If it's about SCHEDULING replacement = MAINTENANCE. If device ALREADY failed = HARDWARE.
-
-Ticket Description: "${description}"
-
-Return ONLY valid JSON (no markdown, just the JSON):
-{"issue_type":"CategoryName","confidence":0.95,"reason":"One sentence explanation"}`;
-
-        const result = await model.generateContent(prompt);
-        const response = result.response;
-        const text = response.text();
-        
-        console.log('🌐 Gemini raw response:', text.substring(0, 200));
-        
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          try {
-            const classification = JSON.parse(jsonMatch[0]);
-            
-            const validCategories = ['Hardware', 'Software', 'Network', 'Security', 'Account', 'Database', 'Configuration', 'Maintenance', 'Other'];
-            
-            if (validCategories.includes(classification.issue_type)) {
-              console.log(`🌐 Gemini AI RESULT: ${classification.issue_type} (${(classification.confidence * 100).toFixed(1)}% confidence)`);
-              console.log(`📝 Reason: ${classification.reason || 'N/A'}`);
-              
-              return {
-                issue_type: classification.issue_type,
-                confidence: classification.confidence || 0.85,
-                method: 'gemini',
-                reason: classification.reason || ''
-              };
-            } else {
-              console.log(`⚠️ Invalid category: "${classification.issue_type}"`);
-            }
-          } catch (parseError) {
-            console.error('❌ JSON parse error:', parseError.message);
-          }
-        }
-      } catch (geminiError) {
-        console.error('❌ Gemini AI failed:', geminiError.message);
-      }
-    }
-    
-    // If local confidence is decent (>70%), use it
-    if (localConfidence > 0.70) {
-      console.log(`✅ Local classifier decent confidence (${(localConfidence * 100).toFixed(1)}%), using it`);
-      return { 
-        issue_type: topLocalCategory, 
-        confidence: localConfidence,
-        method: 'local_decent_confidence',
-        reason: 'Local classifier has decent confidence'
-      };
-    }
-    
-    // Fallback to keyword-based
-    console.log('🔄 Falling back to keyword-based classification...');
-    return fallbackClassification(description);
-    
-  } catch (error) {
-    console.error('❌ All AI classification methods failed:', error);
-    return fallbackClassification(description);
-  }
-}
-
-// Enhanced fallback with MAINTENANCE as PRIORITY check
+// ========== SUPER ADVANCED FALLBACK CLASSIFICATION ==========
 function fallbackClassification(description) {
   const desc = description.toLowerCase();
+  console.log('🔧 Running advanced keyword-based fallback...');
   
-  console.log('🔧 Running keyword-based fallback classification...');
-  
-  // CHECK MAINTENANCE FIRST (before Hardware)
-  const maintenanceKeywords = [
-    'maintenance', 'scheduled', 'routine', 'preventive', 'upgrade',
-    'cleanup', 'clean up', 'cleaning', 'optimization', 'optimize',
-    'patch', 'patching', 'service pack', 'firmware update',
-    'health check', 'healthcheck', 'audit', 'review',
-    'quarterly', 'monthly', 'weekly', 'annual', 'yearly',
-    'plan', 'planning', 'schedule', 'scheduling', 'window',
-    'downtime', 'outage window', 'change window',
-    'deployment', 'deploy', 'rollout', 'release',
-    'capacity planning', 'resource planning',
-    'log rotation', 'log cleanup', 'cache clearing',
-    'temp files', 'temporary files', 'disk cleanup',
-    'database cleanup', 'system cleanup',
-    'preventive check', 'regular check', 'routine check',
-    'maintenance mode', 'maintenance plan'
+  // Category rules with weighted keywords
+  const categoryRules = [
+    {
+      type: 'Hardware',
+      keywords: [
+        { word: 'usb', weight: 10 }, { word: 'keyboard', weight: 10 }, { word: 'mouse', weight: 10 },
+        { word: 'printer', weight: 10 }, { word: 'monitor', weight: 10 }, { word: 'screen', weight: 8 },
+        { word: 'laptop', weight: 8 }, { word: 'desktop', weight: 8 }, { word: 'computer', weight: 7 },
+        { word: 'battery', weight: 7 }, { word: 'charger', weight: 7 }, { word: 'power cord', weight: 7 },
+        { word: 'fan', weight: 6 }, { word: 'overheating', weight: 6 }, { word: 'noise', weight: 5 },
+        { word: 'broken', weight: 5 }, { word: 'cracked', weight: 5 }, { word: 'damaged', weight: 5 },
+        { word: 'liquid spill', weight: 8 }, { word: 'burning smell', weight: 8 }, { word: 'smoke', weight: 8 },
+        { word: 'cpu', weight: 8 }, { word: 'ram', weight: 8 }, { word: 'hard drive', weight: 8 },
+        { word: 'ssd', weight: 8 }, { word: 'motherboard', weight: 9 }, { word: 'graphics card', weight: 9 },
+        { word: 'speaker', weight: 7 }, { word: 'webcam', weight: 7 }, { word: 'camera', weight: 7 },
+        { word: 'touchpad', weight: 7 }, { word: 'headphone', weight: 7 }, { word: 'bluetooth', weight: 6 },
+        { word: 'scanner', weight: 7 }, { word: 'projector', weight: 7 }, { word: 'ups', weight: 7 },
+        { word: 'peripheral', weight: 7 }, { word: 'input device', weight: 7 }, { word: 'cable', weight: 5 },
+        { word: 'port', weight: 3 }, { word: 'shuts down', weight: 6 }, { word: 'restarts', weight: 6 },
+        { word: 'not turning on', weight: 8 }, { word: 'wont turn on', weight: 8 }, { word: 'no power', weight: 8 },
+        { word: 'blue screen', weight: 7 }, { word: 'bsod', weight: 7 }, { word: 'black screen', weight: 7 },
+        { word: 'beeping', weight: 6 }, { word: 'grinding', weight: 6 }, { word: 'screeching', weight: 6 },
+      ]
+    },
+    {
+      type: 'Software',
+      keywords: [
+        { word: 'software', weight: 10 }, { word: 'application', weight: 9 }, { word: 'program', weight: 9 },
+        { word: 'microsoft', weight: 9 }, { word: 'word', weight: 8 }, { word: 'excel', weight: 8 },
+        { word: 'powerpoint', weight: 8 }, { word: 'outlook', weight: 8 }, { word: 'adobe', weight: 8 },
+        { word: 'browser', weight: 8 }, { word: 'chrome', weight: 8 }, { word: 'firefox', weight: 8 },
+        { word: 'edge', weight: 8 }, { word: 'install', weight: 7 }, { word: 'uninstall', weight: 7 },
+        { word: 'update', weight: 3 }, { word: 'crash', weight: 6 }, { word: 'error message', weight: 6 },
+        { word: 'license', weight: 6 }, { word: 'activation', weight: 6 }, { word: 'app', weight: 7 },
+        { word: 'bug', weight: 7 }, { word: 'glitch', weight: 7 }, { word: 'driver', weight: 6 },
+        { word: 'windows', weight: 7 }, { word: 'mac', weight: 7 }, { word: 'linux', weight: 7 },
+        { word: 'not responding', weight: 7 }, { word: 'frozen', weight: 7 }, { word: 'stuck', weight: 6 },
+        { word: 'not opening', weight: 7 }, { word: 'keeps crashing', weight: 7 },
+      ]
+    },
+    {
+      type: 'Network',
+      keywords: [
+        { word: 'internet', weight: 10 }, { word: 'wifi', weight: 10 }, { word: 'network', weight: 8 },
+        { word: 'connection', weight: 7 }, { word: 'vpn', weight: 9 }, { word: 'dns', weight: 8 },
+        { word: 'router', weight: 8 }, { word: 'modem', weight: 8 }, { word: 'ethernet', weight: 8 },
+        { word: 'bandwidth', weight: 7 }, { word: 'latency', weight: 7 }, { word: 'ping', weight: 7 },
+        { word: 'signal', weight: 6 }, { word: 'wireless', weight: 7 }, { word: 'downloading', weight: 6 },
+        { word: 'browsing', weight: 6 }, { word: 'streaming', weight: 6 }, { word: 'buffering', weight: 6 },
+        { word: 'upload', weight: 6 }, { word: 'download', weight: 6 }, { word: 'web page', weight: 6 },
+        { word: 'website', weight: 6 }, { word: 'online', weight: 5 }, { word: 'offline', weight: 5 },
+        { word: 'no internet', weight: 9 }, { word: 'cannot connect', weight: 8 }, { word: 'disconnected', weight: 8 },
+        { word: 'slow internet', weight: 8 }, { word: 'no wifi', weight: 9 }, { word: 'proxy', weight: 7 },
+        { word: 'firewall blocking', weight: 5 }, { word: 'lan', weight: 7 }, { word: 'wan', weight: 7 },
+        { word: 'isp', weight: 7 }, { word: 'timeout', weight: 6 }, { word: 'packet loss', weight: 7 },
+      ]
+    },
+    {
+      type: 'Security',
+      keywords: [
+        { word: 'virus', weight: 10 }, { word: 'malware', weight: 10 }, { word: 'security', weight: 7 },
+        { word: 'antivirus', weight: 9 }, { word: 'ransomware', weight: 10 }, { word: 'phishing', weight: 10 },
+        { word: 'spam', weight: 8 }, { word: 'hack', weight: 9 }, { word: 'breach', weight: 9 },
+        { word: 'firewall', weight: 7 }, { word: 'intrusion', weight: 8 }, { word: 'unauthorized', weight: 8 },
+        { word: 'compromised', weight: 8 }, { word: 'suspicious', weight: 7 }, { word: 'infected', weight: 9 },
+        { word: 'attack', weight: 8 }, { word: 'encryption', weight: 7 }, { word: 'certificate', weight: 7 },
+        { word: 'ddos', weight: 9 }, { word: 'spyware', weight: 9 }, { word: 'trojan', weight: 9 },
+        { word: 'worm', weight: 9 }, { word: 'keylogger', weight: 9 }, { word: 'botnet', weight: 9 },
+      ]
+    },
+    {
+      type: 'Account',
+      keywords: [
+        { word: 'login', weight: 10 }, { word: 'account', weight: 9 }, { word: 'password', weight: 8 },
+        { word: 'user', weight: 6 }, { word: 'access', weight: 6 }, { word: 'permission', weight: 8 },
+        { word: 'credentials', weight: 8 }, { word: 'locked', weight: 9 }, { word: 'disabled', weight: 9 },
+        { word: 'forgot', weight: 8 }, { word: 'reset', weight: 7 }, { word: 'profile', weight: 7 },
+        { word: 'sign in', weight: 9 }, { word: 'log in', weight: 9 }, { word: 'authentication', weight: 7 },
+        { word: 'mfa', weight: 8 }, { word: '2fa', weight: 8 }, { word: 'access denied', weight: 9 },
+        { word: 'permission denied', weight: 9 }, { word: 'active directory', weight: 8 }, { word: 'sso', weight: 7 },
+        { word: 'cannot login', weight: 9 }, { word: 'locked out', weight: 9 }, { word: 'deactivated', weight: 8 },
+      ]
+    },
+    {
+      type: 'Database',
+      keywords: [
+        { word: 'database', weight: 10 }, { word: 'sql', weight: 9 }, { word: 'query', weight: 8 },
+        { word: 'mysql', weight: 9 }, { word: 'postgresql', weight: 9 }, { word: 'oracle', weight: 9 },
+        { word: 'mongodb', weight: 9 }, { word: 'table', weight: 7 }, { word: 'index', weight: 7 },
+        { word: 'deadlock', weight: 8 }, { word: 'transaction', weight: 7 }, { word: 'corrupted', weight: 8 },
+        { word: 'data loss', weight: 8 }, { word: 'backup', weight: 5 }, { word: 'replication', weight: 7 },
+        { word: 'stored procedure', weight: 7 }, { word: 'redis', weight: 7 },
+      ]
+    },
+    {
+      type: 'Configuration',
+      keywords: [
+        { word: 'configure', weight: 10 }, { word: 'setting', weight: 7 }, { word: 'setup', weight: 7 },
+        { word: 'configuration', weight: 10 }, { word: 'options', weight: 6 }, { word: 'registry', weight: 8 },
+        { word: 'deployment', weight: 7 }, { word: 'environment', weight: 6 }, { word: 'config file', weight: 9 },
+        { word: 'settings change', weight: 7 }, { word: 'reconfigure', weight: 9 }, { word: 'iis', weight: 7 },
+        { word: 'apache', weight: 7 }, { word: 'nginx', weight: 7 }, { word: 'docker', weight: 7 },
+        { word: 'kubernetes', weight: 7 },
+      ]
+    },
+    {
+      type: 'Maintenance',
+      keywords: [
+        { word: 'maintenance', weight: 10 }, { word: 'scheduled', weight: 8 }, { word: 'routine', weight: 8 },
+        { word: 'preventive', weight: 9 }, { word: 'upgrade', weight: 5 }, { word: 'cleanup', weight: 6 },
+        { word: 'patch', weight: 6 }, { word: 'service pack', weight: 7 }, { word: 'health check', weight: 7 },
+        { word: 'downtime', weight: 7 }, { word: 'window', weight: 4 }, { word: 'plan', weight: 4 },
+        { word: 'planning', weight: 4 }, { word: 'schedule', weight: 5 }, { word: 'quarterly', weight: 6 },
+        { word: 'monthly', weight: 6 }, { word: 'weekly', weight: 6 }, { word: 'annual', weight: 6 },
+      ]
+    },
   ];
-  
-  let maintenanceCount = 0;
-  for (const keyword of maintenanceKeywords) {
-    if (desc.includes(keyword)) {
-      maintenanceCount++;
-    }
-  }
-  
-  // If 2 or more maintenance keywords found, classify as Maintenance
-  if (maintenanceCount >= 2) {
-    console.log(`🔧 MAINTENANCE detected (${maintenanceCount} keywords matched)`);
-    return { 
-      issue_type: 'Maintenance', 
-      confidence: Math.min(0.7 + (maintenanceCount * 0.08), 0.95),
-      method: 'fallback_maintenance_priority',
-      reason: `Matched ${maintenanceCount} maintenance keywords`
-    };
-  }
-  
-  // Check Hardware
-  const hardwareKeywords = [
-    'computer', 'laptop', 'printer', 'monitor', 'keyboard', 'mouse', 
-    'screen', 'battery', 'power', 'fan', 'usb', 'speaker', 'webcam', 
-    'touchpad', 'desktop', 'graphics', 'gpu', 'motherboard', 'cpu', 'ram',
-    'shuts down', 'shutdown', 'restarts', 'restarting', 'turns off',
-    'overheating', 'overheat', 'burning smell', 'smoke',
-    'blue screen', 'bsod', 'black screen', 'no display',
-    'beeping', 'beep', 'clicking sound', 'noise', 'loud',
-    'cracked', 'broken', 'damaged', 'liquid spill', 'water damage',
-    'charging', 'charger', 'power cord', 'adapter', 'plug',
-    'hinge', 'loose', 'wobbly', 'stand',
-    'dead pixel', 'flickering', 'lines on screen', 'backlight',
-    'hard drive', 'ssd', 'storage', 'disk', 'hdd',
-    'not turning on', 'wont turn on', 'no power', 'dead',
-    'freezes and restarts', 'crashes and reboots', 'keeps restarting',
-    'randomly turns off', 'suddenly shuts', 'unexpectedly shuts',
-    'powers down', 'powered down', 'shut down randomly',
-    'grinding', 'screeching', 'whining noise'
-  ];
-  
-  let hardwareCount = 0;
-  for (const keyword of hardwareKeywords) {
-    if (desc.includes(keyword)) {
-      hardwareCount++;
-    }
-  }
-  
-  if (hardwareCount >= 2) {
-    console.log(`🔧 HARDWARE detected (${hardwareCount} keywords matched)`);
-    return { 
-      issue_type: 'Hardware', 
-      confidence: Math.min(0.7 + (hardwareCount * 0.08), 0.95),
-      method: 'fallback_hardware_priority',
-      reason: `Matched ${hardwareCount} hardware keywords`
-    };
-  }
-  
-  // Check other categories...
-  const rules = [
-    { type: 'Software', keywords: ['software', 'application', 'program', 'microsoft', 'word', 'excel', 'crash', 'error message', 'install', 'app', 'bug', 'glitch', 'license', 'adobe', 'browser', 'chrome', 'firefox', 'driver', 'windows', 'mac', 'linux', 'not opening', 'not responding', 'frozen', 'stuck'] },
-   { type: 'Network', keywords: [
-  'internet', 'wifi', 'network', 'connection', 'vpn', 'dns', 'router', 'modem', 
-  'ethernet', 'bandwidth', 'latency', 'ping', 'signal', 'wireless', 
-  'no internet', 'cannot connect', 'disconnected', 'slow internet', 'weak signal', 'no wifi',
-  'downloading', 'download', 'browsing', 'browse', 'browser slow', 'slow browsing',
-  'streaming', 'buffering', 'uploading', 'upload slow', 'download slow',
-  'web page', 'website', 'url', 'http', 'https', 'web browsing',
-  'online', 'offline', 'no connection', 'limited connectivity',
-  'network slow', 'network speed', 'internet speed', 'speed test',
-  'cannot reach', 'unreachable', 'timeout', 'timed out', 'connection refused',
-  'proxy', 'gateway', 'subnet', 'lan', 'wan', 'isp',
-  'tcp', 'udp', 'packet loss', 'jitter', 'throughput',
-  'port', 'firewall blocking', 'nat', 'dhcp'
-] },
-    { type: 'Account', keywords: ['login', 'account', 'password', 'user', 'access', 'permission', 'credentials', 'locked', 'disabled', 'forgot', 'reset', 'profile', 'sign in', 'log in', 'authentication', 'mfa', 'access denied', 'permission denied'] },
-    { type: 'Database', keywords: ['database', 'data', 'sql', 'query', 'mysql', 'postgresql', 'oracle', 'mongodb', 'table', 'index', 'deadlock', 'transaction', 'corrupted', 'data loss', 'backup'] },
-    { type: 'Configuration', keywords: ['configure', 'setting', 'setup', 'configuration', 'options', 'registry', 'deployment', 'environment', 'config file', 'settings change', 'reconfigure'] }
-  ];
-  
-  let bestMatch = { type: 'Other', confidence: 0.3, keywordCount: 0 };
-  
-  for (const rule of rules) {
-    let matchCount = 0;
-    for (const keyword of rule.keywords) {
-      if (desc.includes(keyword)) {
-        matchCount++;
+
+  let bestScore = 0;
+  let bestCategory = 'Other';
+  let matchedWords = [];
+
+  for (const rule of categoryRules) {
+    let score = 0;
+    let words = [];
+    for (const kw of rule.keywords) {
+      if (desc.includes(kw.word)) {
+        score += kw.weight;
+        words.push(kw.word);
       }
     }
-    if (matchCount > bestMatch.keywordCount) {
-      bestMatch = { 
-        type: rule.type, 
-        confidence: Math.min(0.3 + (matchCount * 0.12), 0.88),
-        keywordCount: matchCount
-      };
+    if (score > bestScore) {
+      bestScore = score;
+      bestCategory = rule.type;
+      matchedWords = words;
     }
   }
 
-  // If hardware came second but has keywords, prefer it over Other
-  if (bestMatch.type === 'Other' && hardwareCount >= 1) {
-    console.log(`🔧 Defaulting to Hardware (${hardwareCount} keywords vs Other)`);
-    return { 
-      issue_type: 'Hardware', 
-      confidence: 0.5,
-      method: 'fallback_hardware_default',
-      reason: `Matched ${hardwareCount} hardware keywords, no other category matched`
-    };
-  }
-  
-  console.log(`🔧 Fallback RESULT: ${bestMatch.type} (${bestMatch.keywordCount} keywords, ${(bestMatch.confidence * 100).toFixed(1)}% confidence)`);
-  
+  const confidence = Math.min(0.5 + (bestScore * 0.02), 0.95);
+  console.log(`🔧 Fallback RESULT: ${bestCategory} (score: ${bestScore}, confidence: ${(confidence * 100).toFixed(1)}%)`);
+  console.log(`🔧 Matched words: ${matchedWords.slice(0, 5).join(', ')}`);
+
   return { 
-    issue_type: bestMatch.type, 
-    confidence: bestMatch.confidence,
-    method: 'fallback_keywords',
-    reason: `Matched ${bestMatch.keywordCount} keywords`
+    issue_type: bestCategory, 
+    confidence: confidence,
+    method: 'advanced_fallback',
+    reason: `Matched ${matchedWords.length} keywords with score ${bestScore}`
   };
 }
+
+
+
+
+
 
 // ========== QUEUE MANAGEMENT FUNCTIONS ==========
 
