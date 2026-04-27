@@ -3266,7 +3266,7 @@ app.put('/api/change-password', authenticateToken, requireDatabase, async (req, 
       const passwordChangeHtml = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
           <div style="background: #ffc107; padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
-            <h1 style="color: #333; margin: 0;">🔐 Password Changed</h1>
+            <h1 style="color: #333; margin: 0;">🔐 ${user.role === 'admin' ? 'Admin' : ''} Password Changed</h1>
           </div>
           <div style="padding: 20px;">
             <h2 style="color: #333;">Hello ${user.name},</h2>
@@ -3296,7 +3296,7 @@ app.put('/api/change-password', authenticateToken, requireDatabase, async (req, 
       const mailOptions = {
         from: '"IT Help Desk Security" <hussenseid670@gmail.com>',
         to: user.email,
-        subject: '🔐 Password Changed - IT Help Desk',
+        subject: `🔐 ${user.role === 'admin' ? 'Admin' : ''} Password Changed - IT Help Desk`,
         html: passwordChangeHtml
       };
       
@@ -3308,12 +3308,13 @@ app.put('/api/change-password', authenticateToken, requireDatabase, async (req, 
 
     // 🔥 NOTIFY ADMIN
     try {
-      await notifyAdmin('🔐 User Password Changed', 
-        `${user.name} (${user.email}) has changed their password.`, {
-        userName: user.name,
-        userEmail: user.email,
-        action: 'password_change'
-      });
+    const isAdminUser = user.role === 'admin';
+await notifyAdmin(`🔐 ${isAdminUser ? 'Admin' : 'User'} Password Changed`, 
+  `${user.name} (${user.email}) has changed their ${isAdminUser ? 'admin' : ''} password.`, {
+  userName: user.name,
+  userEmail: user.email,
+  action: 'password_change'
+});
     } catch (adminEmailError) {
       console.error('❌ Admin notification failed:', adminEmailError.message);
     }
