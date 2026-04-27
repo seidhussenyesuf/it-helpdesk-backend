@@ -1912,6 +1912,122 @@ trainingData.forEach(([text, category]) => {
 enhancedClassifier.train();
 console.log('✅ AI classifier training completed');
 
+
+
+
+
+
+
+
+// ========== FULL ONLINE AI CLASSIFICATION ==========
+async function classifyTicketWithAI(description) {
+  try {
+    console.log('🤖 ========================================');
+    console.log('🤖 AI CLASSIFICATION REQUEST');
+    console.log('🤖 Description: "' + description.substring(0, 100) + (description.length > 100 ? '...' : '') + '"');
+    console.log('🤖 ========================================');
+    
+    // First try local classifier
+    const localClassification = enhancedClassifier.getClassifications(description);
+    const topLocalCategory = localClassification[0].label;
+    const localConfidence = localClassification[0].value;
+    
+    console.log(`🤖 Local AI Top 3:`);
+    localClassification.slice(0, 3).forEach((c, i) => {
+      console.log(`   ${i+1}. ${c.label}: ${(c.value * 100).toFixed(1)}%`);
+    });
+    
+    // If local confidence is VERY high (>92%), use it
+    if (localConfidence > 0.92) {
+      console.log(`✅ Local classifier VERY HIGH confidence (${(localConfidence * 100).toFixed(1)}%), using it`);
+      return { 
+        issue_type: topLocalCategory, 
+        confidence: localConfidence,
+        method: 'local_high_confidence',
+        reason: 'Local classifier has very high confidence'
+      };
+    }
+    
+    // Try Gemini AI (FREE)
+    if (genAI) {
+      try {
+        console.log('🌐 Attempting Google Gemini AI classification...');
+        
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        
+        const prompt = `You are an IT help desk ticket classifier. Classify this ticket into EXACTLY ONE category.
+
+CATEGORIES: Hardware, Software, Network, Security, Account, Database, Configuration, Maintenance, Other
+
+CRITICAL RULES:
+- USB, keyboard, mouse, printer, monitor, laptop, computer, battery, charger, fan, speaker, webcam = HARDWARE
+- Software, application, program, Microsoft, Adobe, browser, app, install, crash, error message = SOFTWARE
+- Internet, wifi, network, VPN, DNS, router, connection, browsing, downloading = NETWORK
+- Virus, malware, security, phishing, spam, antivirus, ransomware, hack = SECURITY
+- Login, account, password, access denied, permissions, credentials, MFA = ACCOUNT
+- Database, SQL, MySQL, query, data, table, backup = DATABASE
+- Configure, setting, setup, config, deployment, registry = CONFIGURATION
+- Maintenance, scheduled, routine, preventive, patch, upgrade, cleanup = MAINTENANCE
+- Only use Other if absolutely nothing else fits
+
+Ticket: "${description}"
+
+Return ONLY JSON: {"issue_type":"CategoryName","confidence":0.95,"reason":"brief reason"}`;
+
+        const result = await model.generateContent(prompt);
+        const response = result.response;
+        const text = response.text();
+        
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try {
+            const classification = JSON.parse(jsonMatch[0]);
+            const validCategories = ['Hardware', 'Software', 'Network', 'Security', 'Account', 'Database', 'Configuration', 'Maintenance', 'Other'];
+            
+            if (validCategories.includes(classification.issue_type)) {
+              console.log(`🌐 Gemini AI RESULT: ${classification.issue_type} (${(classification.confidence * 100).toFixed(1)}% confidence)`);
+              return {
+                issue_type: classification.issue_type,
+                confidence: classification.confidence || 0.85,
+                method: 'gemini',
+                reason: classification.reason || ''
+              };
+            }
+          } catch (parseError) {
+            console.error('❌ JSON parse error:', parseError.message);
+          }
+        }
+      } catch (geminiError) {
+        console.error('❌ Gemini AI failed:', geminiError.message);
+      }
+    }
+    
+    // If local confidence is decent (>70%), use it
+    if (localConfidence > 0.70) {
+      return { 
+        issue_type: topLocalCategory, 
+        confidence: localConfidence,
+        method: 'local_decent_confidence'
+      };
+    }
+    
+    // Fallback to keyword-based
+    console.log('🔄 Falling back to keyword-based classification...');
+    return fallbackClassification(description);
+    
+  } catch (error) {
+    console.error('❌ All AI classification methods failed:', error);
+    return fallbackClassification(description);
+  }
+}
+
+
+
+
+
+
+
+
 // ========== SUPER ADVANCED FALLBACK CLASSIFICATION ==========
 function fallbackClassification(description) {
   const desc = description.toLowerCase();
