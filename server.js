@@ -1812,6 +1812,13 @@ const trainingData = [
   ['api key access issue', 'Account'],
 
   // ===== DATABASE (Team 6) - SQL, data storage =====
+  ['database error', 'Database'],
+['db error', 'Database'],
+['cannot connect to database', 'Database'],
+['database server down', 'Database'],
+['data corruption', 'Database'],
+['database not responding', 'Database'],
+['sql error', 'Database'],
   ['database slow performance query', 'Database'],
   ['sql server connection failed timeout', 'Database'],
   ['database backup failed recovery', 'Database'],
@@ -2136,6 +2143,9 @@ function fallbackClassification(description) {
         { word: 'deadlock', weight: 8 }, { word: 'transaction', weight: 7 }, { word: 'corrupted', weight: 8 },
         { word: 'data loss', weight: 8 }, { word: 'backup', weight: 5 }, { word: 'replication', weight: 7 },
         { word: 'stored procedure', weight: 7 }, { word: 'redis', weight: 7 },
+{ word: 'db', weight: 8 }, { word: 'data', weight: 5 }, { word: 'record', weight: 5 },
+{ word: 'row', weight: 5 }, { word: 'column', weight: 5 }, { word: 'schema', weight: 7 },
+{ word: 'migration', weight: 6 }, { word: 'restore', weight: 6 }, { word: 'dump', weight: 6 },
       ]
     },
     {
@@ -2146,7 +2156,12 @@ function fallbackClassification(description) {
         { word: 'deployment', weight: 7 }, { word: 'environment', weight: 6 }, { word: 'config file', weight: 9 },
         { word: 'settings change', weight: 7 }, { word: 'reconfigure', weight: 9 }, { word: 'iis', weight: 7 },
         { word: 'apache', weight: 7 }, { word: 'nginx', weight: 7 }, { word: 'docker', weight: 7 },
-        { word: 'kubernetes', weight: 7 },
+        { word: 'kubernetes', weight: 7 }, { word: 'file', weight: 6 }, { word: 'folder', weight: 6 },
+{ word: 'directory', weight: 6 }, { word: 'cannot open', weight: 8 }, { word: 'not opening', weight: 5 },
+{ word: 'access denied', weight: 7 }, { word: 'permission', weight: 5 },
+{ word: 'preferences', weight: 7 }, { word: 'default', weight: 5 }, { word: 'reset', weight: 4 },
+{ word: 'not saving', weight: 7 }, { word: 'not working properly', weight: 6 },
+{ word: 'wrong settings', weight: 7 }, { word: 'incorrect configuration', weight: 8 },
       ]
     },
     {
