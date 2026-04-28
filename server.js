@@ -4680,7 +4680,7 @@ app.post('/api/auth/forgot-password', requireDatabase, async (req, res) => {
     );
 
     // Create reset link
-    const resetLink = `http://localhost:3000/reset-password?token=${resetToken}`;
+    const resetLink = `https://it-helpdesk-frontend.vercel.app/reset-password?token=${resetToken}`;
 
     // Email content
     const mailOptions = {
